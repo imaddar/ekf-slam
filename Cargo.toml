@@ -1,0 +1,8 @@
+[package]
+name = "ekf-slam"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+nalgebra = "0.34.2"
+serde_yaml = {version = "0.9.34", features = ["deserialize"]}
