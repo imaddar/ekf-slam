@@ -5,4 +5,5 @@ edition = "2024"
 
 [dependencies]
 nalgebra = "0.34.2"
-serde_yaml = {version = "0.9.34", features = ["deserialize"]}
+serde = {version = "1.0.228", features = ["derive"]}
+serde_yaml = {version = "0.9.34"}
