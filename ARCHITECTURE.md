@@ -24,12 +24,14 @@ that assembles a full sequence — only the individual parsing functions below.
 
 `parser.hpp` declares the C++ parser functions. `parser.cpp` currently
 implements EuRoC camera and IMU calibration YAML parsing, IMU measurement CSV
-parsing, ground-truth CSV parsing, and stereo-pair CSV parsing.
+parsing, ground-truth CSV parsing, stereo-pair CSV parsing, and top-level
+EuRoC sequence loading into `Dataset`.
 
 `tests/parser_test.cpp` contains the GoogleTest coverage for the C++ parser.
 Current coverage includes successful camera/IMU YAML parsing, camera calibration
 transform-shape rejection, successful IMU/ground-truth/stereo CSV parsing, IMU
-and ground-truth field-count rejection, and stereo timestamp mismatch rejection.
+and ground-truth field-count rejection, stereo timestamp mismatch rejection, and
+top-level dataset loading from a temporary EuRoC-like directory.
 
 `types.hpp` defines the intended C++ parser output data structures:
 

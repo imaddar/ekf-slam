@@ -19,3 +19,4 @@ ParseResult<std::vector<StereoPair>> parse_stereo_pairs_csv(
     const std::filesystem::path& cam0_image_dir,
     const std::filesystem::path& cam1_csv_path,
     const std::filesystem::path& cam1_image_dir);
+ParseResult<Dataset> parse_dataset(const std::filesystem::path& sequence_root);
