@@ -8,7 +8,9 @@ yet) see [scope.md](scope.md).
 ## What exists
 
 ```
-parser.cpp          initial C++ parser skeleton entry point
+CMakeLists.txt      C++ build and GoogleTest test configuration
+parser.hpp          C++ parser function declarations
+parser.cpp          C++ YAML/CSV parser implementation
 types.hpp           C++ parser output type declarations
 rust/Cargo.toml     Rust crate manifest
 rust/src/main.rs    binary entry point, wires up the `parser` module
@@ -20,7 +22,14 @@ that assembles a full sequence — only the individual parsing functions below.
 
 ## C++ root skeleton
 
-`parser.cpp` is a minimal C++ entry point that includes `types.hpp`.
+`parser.hpp` declares the C++ parser functions. `parser.cpp` currently
+implements EuRoC camera and IMU calibration YAML parsing, IMU measurement CSV
+parsing, ground-truth CSV parsing, and stereo-pair CSV parsing.
+
+`tests/parser_test.cpp` contains the GoogleTest coverage for the C++ parser.
+Current coverage includes successful camera/IMU YAML parsing, camera calibration
+transform-shape rejection, successful IMU/ground-truth/stereo CSV parsing, IMU
+and ground-truth field-count rejection, and stereo timestamp mismatch rejection.
 
 `types.hpp` defines the intended C++ parser output data structures:
 

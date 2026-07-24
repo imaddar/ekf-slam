@@ -29,6 +29,10 @@ refactor with no change to public shape or behavior), no update is needed.
 ## Commands
 
 ```
+cmake -S . -B build -DCMAKE_PREFIX_PATH=/opt/homebrew
+cmake --build build
+ctest --test-dir build --output-on-failure
+
 cd rust
 cargo build
 cargo test              # parser.rs has unit tests colocated in #[cfg(test)] mod tests
