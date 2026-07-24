@@ -1,5 +1,6 @@
 datasets/
 
 /target/
+/rust/target/
 
 Cargo.lock

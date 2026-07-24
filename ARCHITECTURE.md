@@ -8,14 +8,30 @@ yet) see [scope.md](scope.md).
 ## What exists
 
 ```
-src/main.rs     binary entry point, wires up the `parser` module
-src/parser.rs   EuRoC dataset ingestion (YAML calibration + CSV records)
+parser.cpp          initial C++ parser skeleton entry point
+types.hpp           C++ parser output type declarations
+rust/Cargo.toml     Rust crate manifest
+rust/src/main.rs    binary entry point, wires up the `parser` module
+rust/src/parser.rs  EuRoC dataset ingestion (YAML calibration + CSV records)
 ```
 
 There is no filter, state, or estimation code yet, and no `Dataset::load(...)`
 that assembles a full sequence — only the individual parsing functions below.
 
-## `parser.rs`
+## C++ root skeleton
+
+`parser.cpp` is a minimal C++ entry point that includes `types.hpp`.
+
+`types.hpp` defines the intended C++ parser output data structures:
+
+- `TimestampNs` — alias for `std::uint64_t` nanosecond timestamps.
+- `CameraCalibration` and `ImuCalibration` — YAML calibration output structs.
+- `StereoPair`, `ImuMeasurement`, and `GroundTruthState` — parsed sensor and
+  label records.
+- `Dataset` — top-level parsed dataset containing `sequence_root`, the
+  calibration structs, stereo pairs, IMU measurements, and ground-truth states.
+
+## `rust/src/parser.rs`
 
 ### Domain types
 
@@ -83,6 +99,6 @@ truth CSV.
 
 ## Keeping this document current
 
-This file must reflect only what is actually implemented in `src/`. Update it
+This file must reflect only what is actually implemented in `rust/src/`. Update it
 whenever a change adds, removes, or restructures modules, public types, or
 entry points — see the instruction in [CLAUDE.md](CLAUDE.md).

@@ -1,6 +1,6 @@
 # ekf-slam
 
-Visual-inertial Error-State EKF (ESEKF) SLAM, built from scratch in Rust,
+Visual-inertial Error-State EKF (ESEKF) SLAM, currently prototyped in Rust,
 evaluated offline against the EuRoC MAV dataset, eventually deployed as a
 real-time ROS 2 pipeline on a Jetson Orin Nano. MS-level portfolio project
 targeting autonomy/algorithms roles.
@@ -10,8 +10,10 @@ System design and module layout: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Current state
 
-Only the EuRoC dataset parser (`src/parser.rs`) exists. No filter, state, or
-estimation code yet — `src/main.rs` is a stub. Treat any request to "run the
+The Rust EuRoC dataset parser lives in `rust/src/parser.rs`. The C++ refactor has
+only a root `parser.cpp` skeleton and `types.hpp` parser output declarations. No
+filter, state, or estimation code exists yet — `rust/src/main.rs` and
+`parser.cpp` are stubs. Treat any request to "run the
 filter" or "propagate the state" as premature; check `ARCHITECTURE.md` before
 assuming a module or type already exists — it only documents what's actually
 built, not the target design in `scope.md`.
@@ -20,13 +22,14 @@ built, not the target design in `scope.md`.
 
 `ARCHITECTURE.md` documents only what's implemented — no planned/future work.
 Whenever a change adds, removes, or restructures a module, public type, or
-entry point in `src/`, update `ARCHITECTURE.md` in the same change so it stays
+entry point in `rust/src/`, update `ARCHITECTURE.md` in the same change so it stays
 accurate. If a change is purely internal (e.g. renaming a private helper, a
 refactor with no change to public shape or behavior), no update is needed.
 
 ## Commands
 
 ```
+cd rust
 cargo build
 cargo test              # parser.rs has unit tests colocated in #[cfg(test)] mod tests
 cargo test <name>       # run a single test
