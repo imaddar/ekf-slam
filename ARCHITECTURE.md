@@ -31,7 +31,8 @@ EuRoC sequence loading into `Dataset`.
 Current coverage includes successful camera/IMU YAML parsing, camera calibration
 transform-shape rejection, successful IMU/ground-truth/stereo CSV parsing, IMU
 and ground-truth field-count rejection, stereo timestamp mismatch rejection, and
-top-level dataset loading from a temporary EuRoC-like directory.
+top-level dataset loading from both a temporary EuRoC-like directory and the
+checked-in `datasets/machine_hall/MH_01_easy` sequence.
 
 `types.hpp` defines the intended C++ parser output data structures:
 

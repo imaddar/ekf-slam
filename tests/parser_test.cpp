@@ -247,4 +247,25 @@ TEST(DatasetParserTest, ParsesEuRocSequenceDirectory) {
     ASSERT_EQ(dataset->ground_truth_states.size(), 1);
 }
 
+TEST(DatasetParserTest, SmokeParsesMh01EasyDataset) {
+    const auto sequence_root = std::filesystem::path(EKF_SLAM_SOURCE_DIR) / "datasets/machine_hall/MH_01_easy";
+    ASSERT_TRUE(std::filesystem::exists(sequence_root))
+        << "MH_01_easy dataset fixture is required for this smoke test: " << sequence_root;
+
+    const auto dataset = parse_dataset(sequence_root);
+
+    ASSERT_TRUE(dataset) << dataset.error();
+    EXPECT_EQ(dataset->sequence_root, sequence_root);
+    EXPECT_EQ(dataset->cam0_calibration.resolution.x(), 752);
+    EXPECT_EQ(dataset->cam0_calibration.resolution.y(), 480);
+    EXPECT_EQ(dataset->cam1_calibration.resolution.x(), 752);
+    EXPECT_EQ(dataset->cam1_calibration.resolution.y(), 480);
+    EXPECT_DOUBLE_EQ(dataset->imu_calibration.rate_hz, 200.0);
+    EXPECT_FALSE(dataset->stereo_pairs.empty());
+    EXPECT_FALSE(dataset->imu_measurements.empty());
+    EXPECT_FALSE(dataset->ground_truth_states.empty());
+    EXPECT_EQ(dataset->stereo_pairs.front().cam0_image_path.parent_path(), sequence_root / "mav0/cam0/data");
+    EXPECT_EQ(dataset->stereo_pairs.front().cam1_image_path.parent_path(), sequence_root / "mav0/cam1/data");
+}
+
 }  // namespace

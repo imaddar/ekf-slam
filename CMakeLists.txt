@@ -51,6 +51,11 @@ if(BUILD_TESTING)
             -Werror
     )
 
+    target_compile_definitions(parser_tests
+        PRIVATE
+            EKF_SLAM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+
     include(GoogleTest)
     gtest_discover_tests(parser_tests)
 endif()

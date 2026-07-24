@@ -46,6 +46,10 @@ std::string trim(std::string_view value) {
     return std::string(begin, end);
 }
 
+std::string strip_inline_comment(std::string_view value) {
+    return trim(value.substr(0, value.find('#')));
+}
+
 ParseResult<std::string> read_file(const std::filesystem::path& file_path, std::string_view file_kind) {
     std::ifstream file(file_path);
     if (!file) {
@@ -77,6 +81,8 @@ ParseResult<std::string> read_csv_file(const std::filesystem::path& file_path, s
 std::unordered_map<std::string, std::string> parse_flat_yaml(std::string_view content) {
     std::unordered_map<std::string, std::string> fields;
     std::string section;
+    std::string pending_key;
+    std::string pending_value;
 
     std::istringstream lines{std::string(content)};
     std::string line;
@@ -86,13 +92,23 @@ std::unordered_map<std::string, std::string> parse_flat_yaml(std::string_view co
             continue;
         }
 
+        if (!pending_key.empty()) {
+            pending_value += " " + strip_inline_comment(trimmed);
+            if (pending_value.find(']') != std::string::npos) {
+                fields.emplace(std::move(pending_key), std::move(pending_value));
+                pending_key.clear();
+                pending_value.clear();
+            }
+            continue;
+        }
+
         const auto colon = trimmed.find(':');
         if (colon == std::string::npos) {
             continue;
         }
 
         std::string key = trim(std::string_view(trimmed).substr(0, colon));
-        std::string value = trim(std::string_view(trimmed).substr(colon + 1));
+        std::string value = strip_inline_comment(std::string_view(trimmed).substr(colon + 1));
         if (value.empty()) {
             section = key;
             continue;
@@ -104,6 +120,12 @@ std::unordered_map<std::string, std::string> parse_flat_yaml(std::string_view co
             key = section + "." + key;
         } else {
             section.clear();
+        }
+
+        if (value.find('[') != std::string::npos && value.find(']') == std::string::npos) {
+            pending_key = std::move(key);
+            pending_value = std::move(value);
+            continue;
         }
 
         fields.emplace(std::move(key), std::move(value));
@@ -339,14 +361,16 @@ ParseResult<std::vector<StereoPair>> pair_stereo_frames(
 
 ParseResult<std::vector<std::string>> parse_flat_list_items(std::string_view value, std::string_view field_name) {
     const std::string trimmed = trim(value);
-    if (trimmed.size() < 2 || trimmed.front() != '[' || trimmed.back() != ']') {
+    const auto list_begin = trimmed.find('[');
+    const auto list_end = trimmed.find(']', list_begin);
+    if (list_begin == std::string::npos || list_end == std::string::npos || list_end <= list_begin) {
         return std::unexpected(std::format("{} must be a YAML inline list", field_name));
     }
 
     // This only supports flat scalar lists like [1.0, 2.0]; it is not a general
     // YAML list parser for nested collections or quoted strings with commas.
     std::vector<std::string> items;
-    std::string inner = trimmed.substr(1, trimmed.size() - 2);
+    std::string inner = trimmed.substr(list_begin + 1, list_end - list_begin - 1);
     std::istringstream stream(inner);
     std::string item;
     while (std::getline(stream, item, ',')) {
