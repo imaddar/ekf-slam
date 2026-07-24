@@ -1,7 +1,5 @@
 datasets/
 
-/target/
-/rust/target/
 /build/
 
 Cargo.lock

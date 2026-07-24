@@ -1,6 +1,6 @@
 # ekf-slam
 
-Visual-inertial Error-State EKF (ESEKF) SLAM, currently prototyped in Rust,
+Visual-inertial Error-State EKF (ESEKF) SLAM, built from scratch in C++,
 evaluated offline against the EuRoC MAV dataset, eventually deployed as a
 real-time ROS 2 pipeline on a Jetson Orin Nano. MS-level portfolio project
 targeting autonomy/algorithms roles.
@@ -10,10 +10,9 @@ System design and module layout: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Current state
 
-The Rust EuRoC dataset parser lives in `rust/src/parser.rs`. The C++ refactor has
-only a root `parser.cpp` skeleton and `types.hpp` parser output declarations. No
-filter, state, or estimation code exists yet — `rust/src/main.rs` and
-`parser.cpp` are stubs. Treat any request to "run the
+The C++ EuRoC dataset parser lives in `parser.cpp`, with public declarations in
+`parser.hpp` and output data structures in `types.hpp`. No filter, state, or
+estimation code exists yet. Treat any request to "run the
 filter" or "propagate the state" as premature; check `ARCHITECTURE.md` before
 assuming a module or type already exists — it only documents what's actually
 built, not the target design in `scope.md`.
@@ -22,7 +21,7 @@ built, not the target design in `scope.md`.
 
 `ARCHITECTURE.md` documents only what's implemented — no planned/future work.
 Whenever a change adds, removes, or restructures a module, public type, or
-entry point in `rust/src/`, update `ARCHITECTURE.md` in the same change so it stays
+entry point in the C++ source/header files, update `ARCHITECTURE.md` in the same change so it stays
 accurate. If a change is purely internal (e.g. renaming a private helper, a
 refactor with no change to public shape or behavior), no update is needed.
 
@@ -32,40 +31,23 @@ refactor with no change to public shape or behavior), no update is needed.
 cmake -S . -B build -DCMAKE_PREFIX_PATH=/opt/homebrew
 cmake --build build
 ctest --test-dir build --output-on-failure
-
-cd rust
-cargo build
-cargo test              # parser.rs has unit tests colocated in #[cfg(test)] mod tests
-cargo test <name>       # run a single test
-cargo fmt
-cargo clippy
 ```
 
-No CI config, no benchmark harness, no `Dataset::load` entry point yet — there is
-no way to run the tool end-to-end against a real dataset directory yet.
+No CI config or benchmark harness yet. `parse_dataset(...)` loads a EuRoC
+sequence into the current C++ `Dataset` shape.
 
 ## Conventions to follow
 
-- **Raw → domain conversion pattern.** Every parsed input type has a `Raw*`
-  struct matching the on-disk format exactly, converted into the public domain
-  type via `TryFrom` (if validation can fail, e.g. matrix shape) or `From` (if
-  conversion is infallible, e.g. fixed-size array → `Vector3`). Follow this
-  pattern for any new parsed input rather than deserializing straight into the
-  domain type.
 - **Error handling.** No panics in library code. Every fallible operation
-  returns `Result<_, String>` with a message naming the field, line number, and
+  returns `ParseResult<T>` with a message naming the field, line number, and
   what was expected vs. what was found. This matches the hard-fail-by-default
   policy in `scope.md` (missing files, malformed YAML/CSV, IMU gaps all hard
   fail; camera frame gaps are meant to warn-and-continue once a sequence loader
   exists).
-- **nalgebra types at the domain boundary.** Raw structs use plain
-  `Vec`/arrays/primitives (serde-friendly); domain structs use `nalgebra`
-  types (`Matrix4<f64>`, `Vector3<f64>`, `Vector4<f64>`, `UnitQuaternion<f64>`).
-  Convert at the `Raw* -> domain` boundary, not before.
-- **Tests live next to the code** in a `#[cfg(test)] mod tests` block at the
-  bottom of the file, not in a separate `tests/` directory. Keep following that
-  layout for `parser.rs`; revisit only if integration-style tests (e.g. against
-  a real dataset fixture) are added later.
+- **Eigen types at the domain boundary.** Parser output structs use Eigen types
+  (`Matrix4d`, `Vector2i`, `Vector3d`, `Vector4d`, `Quaterniond`) for math-facing
+  data.
+- **Tests live in `tests/`** and run through CMake/CTest with GoogleTest.
 - **Comments are rare.** The existing code has almost none; only add one for a
   genuinely non-obvious constraint (e.g. why `T_BS` must be exactly 4x4), not to
   restate what a line does.
@@ -76,7 +58,7 @@ no way to run the tool end-to-end against a real dataset directory yet.
   — large, checked-in binary/data files. Don't read or grep through
   `datasets/**/data/*.png` wholesale; use it only as fixture data if a test
   needs a real sample file, and prefer the small inline YAML/CSV fixtures already
-  used in `parser.rs`'s tests.
+  used in `tests/parser_test.cpp`.
 - When implementing a new phase item from `scope.md`, check off the
   corresponding checkbox in that file as part of the change.
 - This project has no `AGENTS.md` distinct from this file — `AGENTS.md` is a

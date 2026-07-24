@@ -1,8 +1,8 @@
-# EKF-SLAM in Rust — Project Scope
+# EKF-SLAM in C++ — Project Scope
 
 ## Goal
 
-Build a real-time visual-inertial EKF-SLAM system from scratch in Rust, evaluated on the EuRoC MAV dataset. Intended as an MS-level portfolio piece targeting autonomy/embedded/algorithms roles (Anduril, Boston Dynamics, Skydio, Figure).
+Build a real-time visual-inertial EKF-SLAM system from scratch in C++, evaluated on the EuRoC MAV dataset. Intended as an MS-level portfolio piece targeting autonomy/embedded/algorithms roles (Anduril, Boston Dynamics, Skydio, Figure).
 
 ---
 
@@ -15,8 +15,8 @@ Build a real-time visual-inertial EKF-SLAM system from scratch in Rust, evaluate
 | Landmark parameterization | Inverse depth |
 | IMU rate | 200 Hz |
 | Camera rate | 20 Hz stereo, hardware-synchronized |
-| Linear algebra | `nalgebra` |
-| ROS 2 | `rclrs` |
+| Linear algebra | Eigen |
+| ROS 2 | `rclcpp` |
 | Target hardware | Jetson Orin Nano |
 | Dataset | EuRoC MAV |
 
@@ -35,7 +35,7 @@ Single-threaded, runs against recorded EuRoC sequences. Deliverable: ATE/RPE ben
 - [ ] `ImuMeasurement` — timestamp, angular velocity, linear acceleration (CSV)
 - [ ] `StereoPair` — timestamp, cam0/cam1 image paths (CSV)
 - [ ] `GroundTruthState` — timestamp, position, orientation, velocity, biases (CSV)
-- [ ] YAML parsing via `serde_yaml` with `TbsHelper` intermediate for T_BS
+- [ ] YAML parsing for EuRoC `sensor.yaml` files with T_BS shape validation
 - [ ] Error handling: fail fast on missing files, malformed data, IMU gaps; survive camera frame gaps
 
 #### Week 3–5: IMU Propagation
@@ -67,7 +67,7 @@ Single-threaded, runs against recorded EuRoC sequences. Deliverable: ATE/RPE ben
 - [ ] Lock-free or channel-based data handoff between threads
 
 #### Week 14–15: ROS 2 Integration
-- [ ] `rclrs` node setup
+- [ ] `rclcpp` node setup
 - [ ] IMU subscriber (`sensor_msgs/Imu`)
 - [ ] Image subscriber (`sensor_msgs/Image`)
 - [ ] Odometry publisher (`nav_msgs/Odometry`)
