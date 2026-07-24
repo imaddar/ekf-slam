@@ -29,13 +29,13 @@ Build a real-time visual-inertial EKF-SLAM system from scratch in C++, evaluated
 Single-threaded, runs against recorded EuRoC sequences. Deliverable: ATE/RPE benchmark results.
 
 #### Week 1–2: EuRoC Dataset Parser
-- [ ] Top-level `Dataset` struct
-- [ ] `CameraCalibration` — T_BS, intrinsics, distortion, resolution, rate (cam0 + cam1)
-- [ ] `ImuCalibration` — T_BS, noise density, random walk parameters
-- [ ] `ImuMeasurement` — timestamp, angular velocity, linear acceleration (CSV)
-- [ ] `StereoPair` — timestamp, cam0/cam1 image paths (CSV)
-- [ ] `GroundTruthState` — timestamp, position, orientation, velocity, biases (CSV)
-- [ ] YAML parsing for EuRoC `sensor.yaml` files with T_BS shape validation
+- [x] Top-level `Dataset` struct
+- [x] `CameraCalibration` — T_BS, intrinsics, distortion, resolution, rate (cam0 + cam1)
+- [x] `ImuCalibration` — T_BS, noise density, random walk parameters
+- [x] `ImuMeasurement` — timestamp, angular velocity, linear acceleration (CSV)
+- [x] `StereoPair` — timestamp, cam0/cam1 image paths (CSV)
+- [x] `GroundTruthState` — timestamp, position, orientation, velocity, biases (CSV)
+- [x] YAML parsing for EuRoC `sensor.yaml` files with T_BS shape validation
 - [ ] Error handling: fail fast on missing files, malformed data, IMU gaps; survive camera frame gaps
 
 #### Week 3–5: IMU Propagation

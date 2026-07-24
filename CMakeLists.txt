@@ -9,7 +9,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(Eigen3 REQUIRED)
 
 add_library(ekf_slam_parser
+    parser_csv.cpp
     parser.cpp
+    parser_yaml.cpp
 )
 
 target_include_directories(ekf_slam_parser

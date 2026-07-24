@@ -9,9 +9,12 @@ yet) see [scope.md](scope.md).
 
 ```
 CMakeLists.txt      C++ build and GoogleTest test configuration
-parser.hpp          C++ parser function declarations
-parser.cpp          C++ YAML/CSV parser implementation
+parser.hpp          Public C++ parser API declaration
+parser.cpp          Top-level dataset loading orchestration
+parser_csv.hpp/cpp  Internal CSV parsing and stereo frame pairing
+parser_yaml.hpp/cpp Internal EuRoC calibration YAML parsing
 types.hpp           C++ parser output type declarations
+roadmap.md          Planned parser API direction
 tests/parser_test.cpp  C++ parser tests
 ```
 
@@ -19,13 +22,15 @@ There is no filter, state, or estimation code yet.
 
 ## C++ root skeleton
 
-`parser.hpp` declares the C++ parser functions. `parser.cpp` currently
-implements EuRoC camera and IMU calibration YAML parsing, IMU measurement CSV
-parsing, ground-truth CSV parsing, stereo-pair CSV parsing, and top-level
-EuRoC sequence loading into `Dataset`.
+`parser.hpp` exposes only the top-level EuRoC dataset loader. `parser.cpp`
+orchestrates top-level EuRoC sequence loading into `Dataset`. `parser_yaml.cpp`
+implements private EuRoC camera and IMU calibration YAML parsing.
+`parser_csv.cpp` implements private IMU measurement CSV parsing, ground-truth
+CSV parsing, camera CSV parsing, and stereo-pair matching.
 
 `tests/parser_test.cpp` contains the GoogleTest coverage for the C++ parser.
-Current coverage includes successful camera/IMU YAML parsing, camera calibration
+Current coverage validates those behaviors through the public `parse_dataset`
+entry point: successful camera/IMU YAML parsing, camera calibration
 transform-shape rejection, successful IMU/ground-truth/stereo CSV parsing, IMU
 and ground-truth field-count rejection, stereo timestamp mismatch rejection, and
 top-level dataset loading from both a temporary EuRoC-like directory and the
@@ -40,21 +45,14 @@ checked-in `datasets/machine_hall/MH_01_easy` sequence.
 - `Dataset` — top-level parsed dataset containing `sequence_root`, the
   calibration structs, stereo pairs, IMU measurements, and ground-truth states.
 
-### Entry points
+### Entry Points
 
-- `parse_imu_measurements_csv(path)` — public. Reads a file, skips blank/`#`
-  comment lines, parses each remaining line as 7 comma-separated fields
-  (timestamp, angular velocity xyz, acceleration xyz).
-- `parse_ground_truth_csv(path)` — public. Same pattern, 17 fields (timestamp,
-  position xyz, orientation wxyz, velocity xyz, gyro bias xyz, accel bias xyz).
-- `parse_camera_yaml(path)` / `parse_imu_yaml(path)` — public. Parse a single
-  EuRoC `sensor.yaml`-style calibration file into `CameraCalibration` /
-  `ImuCalibration`.
-- `parse_stereo_pairs_csv(cam0_csv_path, cam0_image_dir, cam1_csv_path,
-  cam1_image_dir)` — public. Parses camera frame CSVs and hard-fails on frame
-  count or timestamp mismatch.
 - `parse_dataset(sequence_root)` — public. Loads the standard EuRoC `mav0`
   directory layout into `Dataset`.
+
+Lower-level YAML, CSV, and stereo-pair parsing functions are private
+implementation details in `parser_yaml.cpp` and `parser_csv.cpp`. Planned future
+reader APIs are tracked in [roadmap.md](roadmap.md), but are not implemented.
 
 ### Error handling
 
