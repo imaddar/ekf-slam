@@ -39,10 +39,10 @@ Single-threaded, runs against recorded EuRoC sequences. Deliverable: ATE/RPE ben
 - [ ] Error handling: fail fast on missing files, malformed data, IMU gaps; survive camera frame gaps
 
 #### Week 3–5: IMU Propagation
-- [ ] ESEKF state and covariance definition
+- [x] ESEKF state and covariance definition
 - [ ] Continuous-time IMU model discretization
-- [ ] Propagation step at 200 Hz
-- [ ] Bias integration
+- [x] Propagation step at 200 Hz
+- [x] Bias integration
 
 #### Week 6–8: Camera Measurement Update
 - [ ] Feature detection and tracking (decide: KLT vs descriptor-based)

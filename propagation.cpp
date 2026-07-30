@@ -1,0 +1,71 @@
+#include "propagation.hpp"
+
+namespace {
+
+const Eigen::Vector3d kGravity{0.0, 0.0, -9.81};
+
+constexpr int kPositionIndex = 0;
+constexpr int kVelocityIndex = 3;
+constexpr int kOrientationIndex = 6;
+constexpr int kAccelerometerBiasIndex = 9;
+constexpr int kGyroscopeBiasIndex = 12;
+constexpr int kBlockSize = 3;
+
+Eigen::Matrix3d skew_symmetric(const Eigen::Vector3d& vector) {
+    Eigen::Matrix3d skew;
+    skew << 0.0, -vector.z(), vector.y(),
+        vector.z(), 0.0, -vector.x(),
+        -vector.y(), vector.x(), 0.0;
+    return skew;
+}
+
+}  // namespace
+
+PropagationResult propagate(
+    const NominalState& nominal_state,
+    const ImuMeasurement& measurement,
+    double timestep_seconds,
+    const StateCovariance& covariance) {
+
+    // Remove the current bias estimate before using the IMU sample in either update.
+    const Eigen::Vector3d acceleration = measurement.acceleration - nominal_state.accelerometer_bias;
+    const Eigen::Vector3d angular_velocity = measurement.angular_velocity - nominal_state.gyroscope_bias;
+    // IMU acceleration is measured in the body frame; rotate it before adding world gravity.
+    const Eigen::Vector3d world_acceleration = nominal_state.orientation * acceleration + kGravity;
+    const Eigen::Matrix3d rotation = nominal_state.orientation.matrix();
+
+    // This is the simple constant-input integration step used between adjacent IMU samples.
+    NominalState updated_state{
+        // TODO: Benchmark the second-order acceleration term against first-order position integration.
+        .position = nominal_state.position + nominal_state.velocity * timestep_seconds
+            + 0.5 * world_acceleration * timestep_seconds * timestep_seconds,
+        .velocity = nominal_state.velocity + world_acceleration * timestep_seconds,
+        .orientation = nominal_state.orientation * Sophus::SO3d::exp(angular_velocity * timestep_seconds),
+        .accelerometer_bias = nominal_state.accelerometer_bias,
+        .gyroscope_bias = nominal_state.gyroscope_bias,
+    };
+
+    // F is continuous-time here; each 3x3 block maps one small error component into another.
+    StateCovariance continuous_transition = StateCovariance::Zero();
+    continuous_transition.block<kBlockSize, kBlockSize>(kPositionIndex, kVelocityIndex) = Eigen::Matrix3d::Identity();
+    continuous_transition.block<kBlockSize, kBlockSize>(kVelocityIndex, kOrientationIndex) =
+        -rotation * skew_symmetric(acceleration);
+    continuous_transition.block<kBlockSize, kBlockSize>(kVelocityIndex, kAccelerometerBiasIndex) = -rotation;
+    continuous_transition.block<kBlockSize, kBlockSize>(kOrientationIndex, kOrientationIndex) =
+        -skew_symmetric(angular_velocity);
+    continuous_transition.block<kBlockSize, kBlockSize>(kOrientationIndex, kGyroscopeBiasIndex) =
+        -Eigen::Matrix3d::Identity();
+
+    // Start with Phi = I + F dt; higher-order discretization can be evaluated with Q later.
+    const StateCovariance discrete_transition =
+        StateCovariance::Identity() + continuous_transition * timestep_seconds;
+    // TODO: Replace this zero Q with IMU noise and bias random-walk discretization.
+    const StateCovariance process_noise = StateCovariance::Zero();
+    const StateCovariance updated_covariance =
+        discrete_transition * covariance * discrete_transition.transpose() + process_noise;
+
+    return {
+        .nominal_state = updated_state,
+        .covariance = updated_covariance,
+    };
+}

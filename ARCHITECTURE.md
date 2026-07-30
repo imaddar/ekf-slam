@@ -13,12 +13,18 @@ parser.hpp          Public C++ parser API declaration
 parser.cpp          Top-level dataset loading orchestration
 parser_csv.hpp/cpp  Internal CSV parsing and stereo frame pairing
 parser_yaml.hpp/cpp Internal EuRoC calibration YAML parsing
+propagation.hpp/cpp Public IMU nominal-state propagation
+state.hpp           Public nominal ESEKF state and covariance types
 types.hpp           C++ parser output type declarations
 roadmap.md          Planned parser API direction
 tests/parser_test.cpp  C++ parser tests
+tests/propagation_test.cpp  C++ propagation tests
+tests/state_test.cpp   C++ state-header compile tests
 ```
 
-There is no filter, state, or estimation code yet.
+There is a public nominal ESEKF state layout, state covariance type, and IMU
+nominal-state and covariance propagation. The full error-state struct and
+discretized IMU process-noise model do not exist yet.
 
 ## C++ root skeleton
 
@@ -28,6 +34,19 @@ implements private EuRoC camera and IMU calibration YAML parsing.
 `parser_csv.cpp` implements private IMU measurement CSV parsing, ground-truth
 CSV parsing, camera CSV parsing, and stereo-pair matching.
 
+`state.hpp` defines `NominalState` with position, velocity, Sophus SO(3)
+orientation, accelerometer bias, and gyroscope bias fields. It also defines the
+15x15 `StateCovariance` type used by propagation.
+
+`propagation.hpp` exposes `PropagationResult` and `propagate(...)`. The
+propagation function takes a nominal state, one IMU measurement, a timestep in
+seconds, and a 15x15 state covariance matrix. It removes accelerometer and
+gyroscope biases, treats IMU acceleration as body-frame specific force, adds
+world-frame gravity, and updates position, velocity, and Sophus SO(3)
+orientation. Covariance is propagated with a first-order discrete transition
+matrix derived from the continuous error-state dynamics; process noise is
+currently a zero placeholder.
+
 `tests/parser_test.cpp` contains the GoogleTest coverage for the C++ parser.
 Current coverage validates those behaviors through the public `parse_dataset`
 entry point: successful camera/IMU YAML parsing, camera calibration
@@ -35,6 +54,11 @@ transform-shape rejection, successful IMU/ground-truth/stereo CSV parsing, IMU
 and ground-truth field-count rejection, stereo timestamp mismatch rejection, and
 top-level dataset loading from both a temporary EuRoC-like directory and the
 checked-in `datasets/machine_hall/MH_01_easy` sequence.
+`tests/propagation_test.cpp` verifies stationary behavior, acceleration
+integration, orientation integration, bias removal, and current covariance
+transition behavior.
+`tests/state_test.cpp` verifies that `state.hpp` exposes the nominal-state
+member types.
 
 `types.hpp` defines the intended C++ parser output data structures:
 
@@ -67,7 +91,9 @@ behavior yet.
 ### Tests
 
 Tests live in `tests/parser_test.cpp`, using inline YAML/CSV fixtures plus a
-smoke test against `datasets/machine_hall/MH_01_easy`.
+smoke test against `datasets/machine_hall/MH_01_easy`,
+`tests/state_test.cpp`, which checks the public state-header declarations, and
+`tests/propagation_test.cpp`, which checks the propagation API skeleton.
 
 ## Keeping this document current
 

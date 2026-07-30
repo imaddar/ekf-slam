@@ -7,11 +7,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(Eigen3 REQUIRED)
+find_package(Sophus REQUIRED)
 
 add_library(ekf_slam_parser
     parser_csv.cpp
     parser.cpp
     parser_yaml.cpp
+    propagation.cpp
 )
 
 target_include_directories(ekf_slam_parser
@@ -22,6 +24,7 @@ target_include_directories(ekf_slam_parser
 target_link_libraries(ekf_slam_parser
     PUBLIC
         Eigen3::Eigen
+        Sophus::Sophus
 )
 
 target_compile_options(ekf_slam_parser
@@ -60,4 +63,42 @@ if(BUILD_TESTING)
 
     include(GoogleTest)
     gtest_discover_tests(parser_tests)
+
+    add_executable(state_tests
+        tests/state_test.cpp
+    )
+
+    target_link_libraries(state_tests
+        PRIVATE
+            ekf_slam_parser
+            GTest::gtest_main
+    )
+
+    target_compile_options(state_tests
+        PRIVATE
+            -Wall
+            -Wextra
+            -Werror
+    )
+
+    gtest_discover_tests(state_tests)
+
+    add_executable(propagation_tests
+        tests/propagation_test.cpp
+    )
+
+    target_link_libraries(propagation_tests
+        PRIVATE
+            ekf_slam_parser
+            GTest::gtest_main
+    )
+
+    target_compile_options(propagation_tests
+        PRIVATE
+            -Wall
+            -Wextra
+            -Werror
+    )
+
+    gtest_discover_tests(propagation_tests)
 endif()
