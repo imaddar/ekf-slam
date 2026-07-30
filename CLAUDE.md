@@ -48,9 +48,20 @@ sequence into the current C++ `Dataset` shape.
   (`Matrix4d`, `Vector2i`, `Vector3d`, `Vector4d`, `Quaterniond`) for math-facing
   data.
 - **Tests live in `tests/`** and run through CMake/CTest with GoogleTest.
-- **Comments are rare.** The existing code has almost none; only add one for a
-  genuinely non-obvious constraint (e.g. why `T_BS` must be exactly 4x4), not to
-  restate what a line does.
+- **Comment style.** Comments should be brief, clear, and quick to digest for a
+  junior engineer who is somewhat familiar with the math or system being
+  implemented and wants small notes here and there for clarity. Use comments
+  sparingly in both source files and agent instruction files.
+  - Prefer comments that mark a short conceptual step, convention, invariant,
+    trade-off, or TODO.
+  - Avoid restating names, types, or operations that are already obvious from
+    the code.
+  - Keep comments close to the code they explain, usually one line above the
+    relevant block.
+  - Use precise project vocabulary: frame convention, covariance ordering,
+    discretization choice, noise model, parser invariant.
+  - Keep comments short enough to scan during a code review; if a comment needs
+    a paragraph, prefer moving the detail to `ARCHITECTURE.md` or a design note.
 
 ## Working in this repo
 

@@ -14,6 +14,7 @@
     auto var = std::move(*var##_result)
 
 ParseResult<Dataset> parse_dataset(const std::filesystem::path& sequence_root) {
+    // EuRoC stores every sensor stream under mav0, so derive all parser paths from that root.
     const auto mav0_root = sequence_root / "mav0";
     const auto cam0_root = mav0_root / "cam0";
     const auto cam1_root = mav0_root / "cam1";

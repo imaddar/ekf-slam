@@ -116,6 +116,7 @@ std::vector<std::pair<std::size_t, std::string>> csv_data_lines(std::string_view
     while (std::getline(stream, line)) {
         ++line_number;
         std::string trimmed = trim(line);
+        // Keep original line numbers in errors even though headers and blank lines are skipped.
         if (trimmed.empty() || trimmed.starts_with('#')) {
             continue;
         }
@@ -225,6 +226,7 @@ ParseResult<std::vector<StereoPair>> pair_stereo_frames(
     for (std::size_t index = 0; index < cam0_frames.size(); ++index) {
         const auto& cam0_frame = cam0_frames[index];
         const auto& cam1_frame = cam1_frames[index];
+        // Stereo CSVs should align by index, but compare timestamps so a shifted file fails loudly.
         if (cam0_frame.timestamp != cam1_frame.timestamp) {
             return std::unexpected(std::format(
                 "cam0 timestamp {} does not match cam1 timestamp {}",

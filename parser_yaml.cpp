@@ -96,8 +96,7 @@ std::unordered_map<std::string, std::string> parse_flat_yaml(std::string_view co
             continue;
         }
 
-        // EuRoC calibration files use simple nested maps; this assumes indentation
-        // means one level under the most recent section and does not support tabs.
+        // EuRoC sensor.yaml only needs one-level nesting here, so avoid pretending this is full YAML.
         if (!section.empty() && !line.empty() && std::isspace(static_cast<unsigned char>(line[0]))) {
             key = section + "." + key;
         } else {
@@ -161,8 +160,7 @@ ParseResult<std::vector<std::string>> parse_flat_list_items(std::string_view val
         return std::unexpected(std::format("{} must be a YAML inline list", field_name));
     }
 
-    // This only supports flat scalar lists like [1.0, 2.0]; it is not a general
-    // YAML list parser for nested collections or quoted strings with commas.
+    // These calibration lists are flat scalars; nested YAML belongs in a real parser later.
     std::vector<std::string> items;
     std::string inner = trimmed.substr(list_begin + 1, list_end - list_begin - 1);
     std::istringstream stream(inner);
