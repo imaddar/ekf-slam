@@ -58,7 +58,9 @@ checked-in `datasets/machine_hall/MH_01_easy` sequence.
 `tests/propagation_test.cpp` verifies stationary behavior, acceleration
 integration, orientation integration, bias removal, covariance transition
 behavior, process-noise block placement, symmetry, and positive
-semi-definiteness.
+semi-definiteness. It also smoke-tests one second of IMU-only propagation on
+the checked-in `MH_01_easy` sequence against nearby ground truth with loose
+sanity bounds.
 `tests/state_test.cpp` verifies that `state.hpp` exposes the nominal-state
 member types.
 

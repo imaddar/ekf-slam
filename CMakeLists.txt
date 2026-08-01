@@ -100,5 +100,10 @@ if(BUILD_TESTING)
             -Werror
     )
 
+    target_compile_definitions(propagation_tests
+        PRIVATE
+            EKF_SLAM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+
     gtest_discover_tests(propagation_tests)
 endif()

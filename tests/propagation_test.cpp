@@ -1,5 +1,10 @@
 #include "propagation.hpp"
 
+#include "parser.hpp"
+
+#include <algorithm>
+#include <cstdint>
+#include <filesystem>
 #include <numbers>
 
 #include <Eigen/Eigenvalues>
@@ -13,6 +18,7 @@ constexpr int kVelocityIndex = 3;
 constexpr int kOrientationIndex = 6;
 constexpr int kAccelerometerBiasIndex = 9;
 constexpr int kGyroscopeBiasIndex = 12;
+constexpr std::uint64_t kOneSecondNs = 1'000'000'000;
 
 NominalState make_state() {
     return {
@@ -21,6 +27,16 @@ NominalState make_state() {
         .orientation = Sophus::SO3d{},
         .accelerometer_bias = Eigen::Vector3d::Zero(),
         .gyroscope_bias = Eigen::Vector3d::Zero(),
+    };
+}
+
+NominalState make_state_from_ground_truth(const GroundTruthState& ground_truth) {
+    return {
+        .position = ground_truth.position,
+        .velocity = ground_truth.velocity,
+        .orientation = Sophus::SO3d{ground_truth.orientation},
+        .accelerometer_bias = ground_truth.accelerometer_bias,
+        .gyroscope_bias = ground_truth.gyroscope_bias,
     };
 }
 
@@ -37,6 +53,20 @@ ImuCalibration make_imu_calibration(
         .accelerometer_noise_density = accelerometer_noise_density,
         .accelerometer_random_walk = accelerometer_random_walk,
     };
+}
+
+const GroundTruthState& nearest_ground_truth(
+    const std::vector<GroundTruthState>& ground_truth_states,
+    TimestampNs timestamp) {
+    const auto nearest = std::ranges::min_element(
+        ground_truth_states,
+        [timestamp](const GroundTruthState& lhs, const GroundTruthState& rhs) {
+            const auto lhs_delta = lhs.timestamp > timestamp ? lhs.timestamp - timestamp : timestamp - lhs.timestamp;
+            const auto rhs_delta = rhs.timestamp > timestamp ? rhs.timestamp - timestamp : timestamp - rhs.timestamp;
+            return lhs_delta < rhs_delta;
+        });
+
+    return *nearest;
 }
 
 }  // namespace
@@ -186,4 +216,53 @@ TEST(PropagationTest, ProcessNoiseKeepsZeroInitialCovariancePositiveSemiDefinite
 
     EXPECT_TRUE(result.covariance.isApprox(result.covariance.transpose(), kTolerance));
     EXPECT_GE(eigen_solver.eigenvalues().minCoeff(), -kTolerance);
+}
+
+TEST(PropagationTest, SmokePropagatesShortEuRocWindowNearGroundTruth) {
+    const auto sequence_root = std::filesystem::path(EKF_SLAM_SOURCE_DIR) / "datasets/machine_hall/MH_01_easy";
+    ASSERT_TRUE(std::filesystem::exists(sequence_root))
+        << "MH_01_easy dataset fixture is required for this smoke test: " << sequence_root;
+
+    const auto dataset = parse_dataset(sequence_root);
+    ASSERT_TRUE(dataset) << dataset.error();
+    ASSERT_FALSE(dataset->imu_measurements.empty());
+    ASSERT_FALSE(dataset->ground_truth_states.empty());
+
+    const auto& initial_ground_truth = dataset->ground_truth_states.front();
+    NominalState state = make_state_from_ground_truth(initial_ground_truth);
+    StateCovariance covariance = 1e-6 * StateCovariance::Identity();
+    TimestampNs previous_timestamp = initial_ground_truth.timestamp;
+    const TimestampNs end_timestamp = initial_ground_truth.timestamp + kOneSecondNs;
+
+    const auto first_imu = std::ranges::lower_bound(
+        dataset->imu_measurements,
+        initial_ground_truth.timestamp,
+        {},
+        &ImuMeasurement::timestamp);
+    ASSERT_NE(first_imu, dataset->imu_measurements.end());
+
+    TimestampNs propagated_timestamp = previous_timestamp;
+    for (auto imu = first_imu; imu != dataset->imu_measurements.end() && imu->timestamp <= end_timestamp; ++imu) {
+        ASSERT_GE(imu->timestamp, previous_timestamp);
+        const double dt_seconds = static_cast<double>(imu->timestamp - previous_timestamp) * 1e-9;
+        const auto result = propagate(state, *imu, dataset->imu_calibration, dt_seconds, covariance);
+        state = result.nominal_state;
+        covariance = result.covariance;
+        previous_timestamp = imu->timestamp;
+        propagated_timestamp = imu->timestamp;
+    }
+
+    const auto& final_ground_truth = nearest_ground_truth(dataset->ground_truth_states, propagated_timestamp);
+    const double position_error_m = (state.position - final_ground_truth.position).norm();
+    const double velocity_error_mps = (state.velocity - final_ground_truth.velocity).norm();
+    const double orientation_error_rad =
+        (Sophus::SO3d{final_ground_truth.orientation}.inverse() * state.orientation).log().norm();
+    const Eigen::SelfAdjointEigenSolver<StateCovariance> eigen_solver(covariance);
+
+    EXPECT_LT(position_error_m, 2.0);
+    EXPECT_LT(velocity_error_mps, 3.0);
+    EXPECT_LT(orientation_error_rad, 0.5);
+    EXPECT_TRUE(covariance.allFinite());
+    EXPECT_TRUE(covariance.isApprox(covariance.transpose(), 1e-8));
+    EXPECT_GE(eigen_solver.eigenvalues().minCoeff(), -1e-8);
 }
