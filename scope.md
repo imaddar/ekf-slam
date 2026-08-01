@@ -40,7 +40,7 @@ Single-threaded, runs against recorded EuRoC sequences. Deliverable: ATE/RPE ben
 
 #### Week 3–5: IMU Propagation
 - [x] ESEKF state and covariance definition
-- [ ] Continuous-time IMU model discretization
+- [x] Continuous-time IMU model discretization
 - [x] Propagation step at 200 Hz
 - [x] Bias integration
 

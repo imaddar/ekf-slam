@@ -10,6 +10,14 @@ constexpr int kOrientationIndex = 6;
 constexpr int kAccelerometerBiasIndex = 9;
 constexpr int kGyroscopeBiasIndex = 12;
 constexpr int kBlockSize = 3;
+constexpr int kNoiseSize = 12;
+constexpr int kAccelNoiseIndex = 0;
+constexpr int kGyroNoiseIndex = 3;
+constexpr int kAccelBiasNoiseIndex = 6;
+constexpr int kGyroBiasNoiseIndex = 9;
+
+using NoiseJacobian = Eigen::Matrix<double, kErrorStateSize, kNoiseSize>;
+using RawNoiseCovariance = Eigen::Matrix<double, kNoiseSize, kNoiseSize>;
 
 Eigen::Matrix3d skew_symmetric(const Eigen::Vector3d& vector) {
     Eigen::Matrix3d skew;
@@ -24,6 +32,7 @@ Eigen::Matrix3d skew_symmetric(const Eigen::Vector3d& vector) {
 PropagationResult propagate(
     const NominalState& nominal_state,
     const ImuMeasurement& measurement,
+    const ImuCalibration& imu_calibration,
     double timestep_seconds,
     const StateCovariance& covariance) {
 
@@ -59,8 +68,34 @@ PropagationResult propagate(
     // Start with Phi = I + F dt; higher-order discretization can be evaluated with Q later.
     const StateCovariance discrete_transition =
         StateCovariance::Identity() + continuous_transition * timestep_seconds;
-    // TODO: Replace this zero Q with IMU noise and bias random-walk discretization.
-    const StateCovariance process_noise = StateCovariance::Zero();
+
+    NoiseJacobian noise_jacobian = NoiseJacobian::Zero();
+    noise_jacobian.block<kBlockSize, kBlockSize>(kVelocityIndex, kAccelNoiseIndex) = -rotation;
+    noise_jacobian.block<kBlockSize, kBlockSize>(kOrientationIndex, kGyroNoiseIndex) =
+        -Eigen::Matrix3d::Identity();
+    noise_jacobian.block<kBlockSize, kBlockSize>(kAccelerometerBiasIndex, kAccelBiasNoiseIndex) =
+        Eigen::Matrix3d::Identity();
+    noise_jacobian.block<kBlockSize, kBlockSize>(kGyroscopeBiasIndex, kGyroBiasNoiseIndex) =
+        Eigen::Matrix3d::Identity();
+
+    RawNoiseCovariance raw_noise = RawNoiseCovariance::Zero();
+    // EuRoC stores noise densities/random walks, so Q_raw uses their variances.
+    raw_noise.block<kBlockSize, kBlockSize>(kAccelNoiseIndex, kAccelNoiseIndex) =
+        imu_calibration.accelerometer_noise_density * imu_calibration.accelerometer_noise_density
+        * Eigen::Matrix3d::Identity();
+    raw_noise.block<kBlockSize, kBlockSize>(kGyroNoiseIndex, kGyroNoiseIndex) =
+        imu_calibration.gyroscope_noise_density * imu_calibration.gyroscope_noise_density
+        * Eigen::Matrix3d::Identity();
+    raw_noise.block<kBlockSize, kBlockSize>(kAccelBiasNoiseIndex, kAccelBiasNoiseIndex) =
+        imu_calibration.accelerometer_random_walk * imu_calibration.accelerometer_random_walk
+        * Eigen::Matrix3d::Identity();
+    raw_noise.block<kBlockSize, kBlockSize>(kGyroBiasNoiseIndex, kGyroBiasNoiseIndex) =
+        imu_calibration.gyroscope_random_walk * imu_calibration.gyroscope_random_walk
+        * Eigen::Matrix3d::Identity();
+
+    // This first-order Qd keeps the noise model cheap while the exact integral remains future work.
+    const StateCovariance process_noise =
+        noise_jacobian * raw_noise * noise_jacobian.transpose() * timestep_seconds;
     const StateCovariance updated_covariance =
         discrete_transition * covariance * discrete_transition.transpose() + process_noise;
 

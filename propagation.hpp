@@ -11,5 +11,6 @@ struct PropagationResult {
 PropagationResult propagate(
     const NominalState& nominal_state,
     const ImuMeasurement& measurement,
+    const ImuCalibration& imu_calibration,
     double timestep_seconds,
     const StateCovariance& covariance);

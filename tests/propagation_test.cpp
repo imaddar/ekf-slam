@@ -2,6 +2,7 @@
 
 #include <numbers>
 
+#include <Eigen/Eigenvalues>
 #include <gtest/gtest.h>
 
 namespace {
@@ -23,10 +24,26 @@ NominalState make_state() {
     };
 }
 
+ImuCalibration make_imu_calibration(
+    double accelerometer_noise_density = 0.0,
+    double gyroscope_noise_density = 0.0,
+    double accelerometer_random_walk = 0.0,
+    double gyroscope_random_walk = 0.0) {
+    return {
+        .t_bs = Eigen::Matrix4d::Identity(),
+        .rate_hz = 200.0,
+        .gyroscope_noise_density = gyroscope_noise_density,
+        .gyroscope_random_walk = gyroscope_random_walk,
+        .accelerometer_noise_density = accelerometer_noise_density,
+        .accelerometer_random_walk = accelerometer_random_walk,
+    };
+}
+
 }  // namespace
 
 TEST(PropagationTest, KeepsStationaryStateWhenSpecificForceBalancesGravity) {
     const auto state = make_state();
+    const auto imu_calibration = make_imu_calibration();
     const ImuMeasurement measurement{
         .timestamp = 1403636579758555392,
         .acceleration = Eigen::Vector3d{0.0, 0.0, 9.81},
@@ -34,7 +51,7 @@ TEST(PropagationTest, KeepsStationaryStateWhenSpecificForceBalancesGravity) {
     };
     const StateCovariance covariance = StateCovariance::Zero();
 
-    const auto result = propagate(state, measurement, 0.005, covariance);
+    const auto result = propagate(state, measurement, imu_calibration, 0.005, covariance);
 
     EXPECT_TRUE(result.nominal_state.position.isApprox(state.position, kTolerance));
     EXPECT_TRUE(result.nominal_state.velocity.isApprox(state.velocity, kTolerance));
@@ -46,6 +63,7 @@ TEST(PropagationTest, KeepsStationaryStateWhenSpecificForceBalancesGravity) {
 
 TEST(PropagationTest, IntegratesPositionAndVelocityFromWorldAcceleration) {
     const auto state = make_state();
+    const auto imu_calibration = make_imu_calibration();
     const ImuMeasurement measurement{
         .timestamp = 1403636579758555392,
         .acceleration = Eigen::Vector3d{1.0, 2.0, 12.81},
@@ -53,7 +71,7 @@ TEST(PropagationTest, IntegratesPositionAndVelocityFromWorldAcceleration) {
     };
     const StateCovariance covariance = StateCovariance::Identity();
 
-    const auto result = propagate(state, measurement, 0.1, covariance);
+    const auto result = propagate(state, measurement, imu_calibration, 0.1, covariance);
 
     EXPECT_TRUE(result.nominal_state.position.isApprox(Eigen::Vector3d{0.005, 0.01, 0.015}, kTolerance));
     EXPECT_TRUE(result.nominal_state.velocity.isApprox(Eigen::Vector3d{0.1, 0.2, 0.3}, kTolerance));
@@ -62,6 +80,7 @@ TEST(PropagationTest, IntegratesPositionAndVelocityFromWorldAcceleration) {
 
 TEST(PropagationTest, IntegratesOrientationFromAngularVelocity) {
     const auto state = make_state();
+    const auto imu_calibration = make_imu_calibration();
     const ImuMeasurement measurement{
         .timestamp = 1403636579758555392,
         .acceleration = Eigen::Vector3d{0.0, 0.0, 9.81},
@@ -69,7 +88,7 @@ TEST(PropagationTest, IntegratesOrientationFromAngularVelocity) {
     };
     const StateCovariance covariance = StateCovariance::Identity();
 
-    const auto result = propagate(state, measurement, 0.5, covariance);
+    const auto result = propagate(state, measurement, imu_calibration, 0.5, covariance);
     const Sophus::SO3d expected_orientation = Sophus::SO3d::exp(Eigen::Vector3d{0.0, 0.0, std::numbers::pi / 2.0});
 
     EXPECT_TRUE(result.nominal_state.orientation.unit_quaternion().isApprox(expected_orientation.unit_quaternion(), kTolerance));
@@ -83,6 +102,7 @@ TEST(PropagationTest, RemovesAccelerometerAndGyroscopeBiasesBeforeIntegration) {
         .accelerometer_bias = Eigen::Vector3d{0.1, 0.2, 0.3},
         .gyroscope_bias = Eigen::Vector3d{0.4, 0.5, 0.6},
     };
+    const auto imu_calibration = make_imu_calibration();
     const ImuMeasurement measurement{
         .timestamp = 1403636579758555392,
         .acceleration = Eigen::Vector3d{1.1, 0.2, 10.11},
@@ -90,7 +110,7 @@ TEST(PropagationTest, RemovesAccelerometerAndGyroscopeBiasesBeforeIntegration) {
     };
     const StateCovariance covariance = StateCovariance::Zero();
 
-    const auto result = propagate(state, measurement, 0.1, covariance);
+    const auto result = propagate(state, measurement, imu_calibration, 0.1, covariance);
     const Sophus::SO3d expected_orientation = Sophus::SO3d::exp(Eigen::Vector3d{0.0, 0.0, 0.1});
 
     EXPECT_TRUE(result.nominal_state.position.isApprox(Eigen::Vector3d{1.405, 2.5, 3.6}, kTolerance));
@@ -103,6 +123,7 @@ TEST(PropagationTest, RemovesAccelerometerAndGyroscopeBiasesBeforeIntegration) {
 
 TEST(PropagationTest, UpdatesCovarianceWithStateTransitionMatrix) {
     const auto state = make_state();
+    const auto imu_calibration = make_imu_calibration();
     const ImuMeasurement measurement{
         .timestamp = 1403636579758555392,
         .acceleration = Eigen::Vector3d{0.0, 0.0, 9.81},
@@ -110,7 +131,7 @@ TEST(PropagationTest, UpdatesCovarianceWithStateTransitionMatrix) {
     };
     const StateCovariance covariance = StateCovariance::Identity();
 
-    const auto result = propagate(state, measurement, 0.1, covariance);
+    const auto result = propagate(state, measurement, imu_calibration, 0.1, covariance);
 
     EXPECT_TRUE((result.covariance.block<3, 3>(kPositionIndex, kPositionIndex).isApprox(1.01 * Eigen::Matrix3d::Identity(), kTolerance)));
     EXPECT_TRUE((result.covariance.block<3, 3>(kPositionIndex, kVelocityIndex).isApprox(0.1 * Eigen::Matrix3d::Identity(), kTolerance)));
@@ -120,4 +141,49 @@ TEST(PropagationTest, UpdatesCovarianceWithStateTransitionMatrix) {
         (Eigen::Matrix3d{} << 0.0, 0.981, 0.0, -0.981, 0.0, 0.0, 0.0, 0.0, 0.0).finished(),
         kTolerance)));
     EXPECT_TRUE(result.covariance.isApprox(result.covariance.transpose(), kTolerance));
+}
+
+TEST(PropagationTest, AddsFirstOrderProcessNoiseFromImuCalibration) {
+    const auto state = make_state();
+    const auto imu_calibration = make_imu_calibration(
+        2.0,
+        3.0,
+        4.0,
+        5.0);
+    const ImuMeasurement measurement{
+        .timestamp = 1403636579758555392,
+        .acceleration = Eigen::Vector3d{0.0, 0.0, 9.81},
+        .angular_velocity = Eigen::Vector3d::Zero(),
+    };
+    const StateCovariance covariance = StateCovariance::Zero();
+
+    const auto result = propagate(state, measurement, imu_calibration, 0.1, covariance);
+
+    EXPECT_TRUE((result.covariance.block<3, 3>(kPositionIndex, kPositionIndex).isZero(kTolerance)));
+    EXPECT_TRUE((result.covariance.block<3, 3>(kVelocityIndex, kVelocityIndex).isApprox(0.4 * Eigen::Matrix3d::Identity(), kTolerance)));
+    EXPECT_TRUE((result.covariance.block<3, 3>(kOrientationIndex, kOrientationIndex).isApprox(0.9 * Eigen::Matrix3d::Identity(), kTolerance)));
+    EXPECT_TRUE((result.covariance.block<3, 3>(kAccelerometerBiasIndex, kAccelerometerBiasIndex).isApprox(1.6 * Eigen::Matrix3d::Identity(), kTolerance)));
+    EXPECT_TRUE((result.covariance.block<3, 3>(kGyroscopeBiasIndex, kGyroscopeBiasIndex).isApprox(2.5 * Eigen::Matrix3d::Identity(), kTolerance)));
+    EXPECT_TRUE(result.covariance.isApprox(result.covariance.transpose(), kTolerance));
+}
+
+TEST(PropagationTest, ProcessNoiseKeepsZeroInitialCovariancePositiveSemiDefinite) {
+    const auto state = make_state();
+    const auto imu_calibration = make_imu_calibration(
+        0.02,
+        0.03,
+        0.004,
+        0.005);
+    const ImuMeasurement measurement{
+        .timestamp = 1403636579758555392,
+        .acceleration = Eigen::Vector3d{1.0, 2.0, 12.81},
+        .angular_velocity = Eigen::Vector3d{0.1, 0.2, 0.3},
+    };
+    const StateCovariance covariance = StateCovariance::Zero();
+
+    const auto result = propagate(state, measurement, imu_calibration, 0.005, covariance);
+    const Eigen::SelfAdjointEigenSolver<StateCovariance> eigen_solver(result.covariance);
+
+    EXPECT_TRUE(result.covariance.isApprox(result.covariance.transpose(), kTolerance));
+    EXPECT_GE(eigen_solver.eigenvalues().minCoeff(), -kTolerance);
 }

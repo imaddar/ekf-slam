@@ -23,8 +23,8 @@ tests/state_test.cpp   C++ state-header compile tests
 ```
 
 There is a public nominal ESEKF state layout, state covariance type, and IMU
-nominal-state and covariance propagation. The full error-state struct and
-discretized IMU process-noise model do not exist yet.
+nominal-state and covariance propagation. The full error-state struct does not
+exist yet.
 
 ## C++ root skeleton
 
@@ -39,13 +39,14 @@ orientation, accelerometer bias, and gyroscope bias fields. It also defines the
 15x15 `StateCovariance` type used by propagation.
 
 `propagation.hpp` exposes `PropagationResult` and `propagate(...)`. The
-propagation function takes a nominal state, one IMU measurement, a timestep in
-seconds, and a 15x15 state covariance matrix. It removes accelerometer and
-gyroscope biases, treats IMU acceleration as body-frame specific force, adds
-world-frame gravity, and updates position, velocity, and Sophus SO(3)
-orientation. Covariance is propagated with a first-order discrete transition
-matrix derived from the continuous error-state dynamics; process noise is
-currently a zero placeholder.
+propagation function takes a nominal state, one IMU measurement, IMU
+calibration, a timestep in seconds, and a 15x15 state covariance matrix. It
+removes accelerometer and gyroscope biases, treats IMU acceleration as
+body-frame specific force, adds world-frame gravity, and updates position,
+velocity, and Sophus SO(3) orientation. Covariance is propagated with a
+first-order discrete transition matrix derived from the continuous error-state
+dynamics, plus first-order process noise `Q_d = G Q_raw G^T dt` from the IMU
+noise densities and bias random walks.
 
 `tests/parser_test.cpp` contains the GoogleTest coverage for the C++ parser.
 Current coverage validates those behaviors through the public `parse_dataset`
@@ -55,8 +56,9 @@ and ground-truth field-count rejection, stereo timestamp mismatch rejection, and
 top-level dataset loading from both a temporary EuRoC-like directory and the
 checked-in `datasets/machine_hall/MH_01_easy` sequence.
 `tests/propagation_test.cpp` verifies stationary behavior, acceleration
-integration, orientation integration, bias removal, and current covariance
-transition behavior.
+integration, orientation integration, bias removal, covariance transition
+behavior, process-noise block placement, symmetry, and positive
+semi-definiteness.
 `tests/state_test.cpp` verifies that `state.hpp` exposes the nominal-state
 member types.
 
