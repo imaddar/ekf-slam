@@ -12,7 +12,7 @@ Build a real-time visual-inertial EKF-SLAM system from scratch in C++, evaluated
 |---|---|
 | Filter | Error-State EKF (ESEKF) on SE(3) |
 | State vector | Pose (SE(3)), velocity, gyro bias, accel bias |
-| Landmark parameterization | Inverse depth |
+| Landmark parameterization | Stereo-triangulated metric XYZ, 3 dimensions per landmark |
 | IMU rate | 200 Hz |
 | Camera rate | 20 Hz stereo, hardware-synchronized |
 | Linear algebra | Eigen |
@@ -49,7 +49,7 @@ Single-threaded, runs against recorded EuRoC sequences. Deliverable: ATE/RPE/NEE
 
 #### Week 6–8: Camera Measurement Update
 - [ ] Feature detection and tracking (decide: KLT vs descriptor-based)
-- [ ] Inverse-depth landmark initialization
+- [ ] Metric XYZ landmark initialization from stereo triangulation
 - [ ] EKF update step
 - [ ] Landmark marginalization
 

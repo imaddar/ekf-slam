@@ -16,6 +16,7 @@ parser_csv.hpp/cpp  Internal CSV parsing and stereo frame pairing
 parser_yaml.hpp/cpp Internal EuRoC calibration YAML parsing
 propagation.hpp/cpp Public IMU nominal-state propagation
 state.hpp           Public nominal ESEKF state and covariance types
+slam_state.hpp      Public preallocated SLAM state/covariance storage container
 synthetic.hpp/cpp   Public synthetic analytic trajectory and IMU generator
 types.hpp           C++ parser output type declarations
 roadmap.md          Planned parser API direction
@@ -24,13 +25,15 @@ present.md          Technical deep-dive presentation material
 tests/parser_test.cpp  C++ parser tests
 tests/propagation_test.cpp  C++ propagation tests
 tests/state_test.cpp   C++ state-header compile tests
+tests/slam_state_test.cpp  SLAM state storage tests
 tests/synthetic_test.cpp Synthetic trajectory and IMU propagation tests
 ```
 
-There is a public nominal ESEKF state layout, state covariance type, and IMU
-nominal-state and covariance propagation. The full error-state struct does not
-exist yet. A synthetic data harness exists for controlled pre-EuRoC validation
-of propagation behavior.
+There is a public nominal ESEKF state layout, IMU-only state covariance type,
+preallocated SLAM state storage container, and IMU nominal-state and covariance
+propagation. The full error-state struct, landmark registry, state augmentation,
+and measurement update do not exist yet. A synthetic data harness exists for
+controlled pre-EuRoC validation of propagation behavior.
 
 ## C++ root skeleton
 
@@ -41,8 +44,24 @@ implements private EuRoC camera and IMU calibration YAML parsing.
 CSV parsing, camera CSV parsing, and stereo-pair matching.
 
 `state.hpp` defines `NominalState` with position, velocity, Sophus SO(3)
-orientation, accelerometer bias, and gyroscope bias fields. It also defines the
-15x15 `StateCovariance` type used by propagation.
+orientation, accelerometer bias, and gyroscope bias fields. It also defines
+`ImuStateCovariance`, the 15x15 covariance used by the current IMU-only
+propagation path. `StateCovariance` remains as a compatibility alias for the
+existing tests and call sites. This fixed covariance is a development and
+testing artifact for the robot state, not the intended long-term SLAM state
+container: once landmarks enter the state, the filter should own a joint state
+container with a preallocated maximum-size covariance and a tracked active
+dimension.
+
+`slam_state.hpp` defines `SlamState`, the storage-only joint state container for
+the upcoming landmark work. It owns a `NominalState`, a single preallocated
+dynamic covariance matrix, a maximum landmark budget, and an active landmark
+count. The allocated covariance dimension is fixed at construction as
+`15 + max_landmarks * 3`, while `active_dim()` reports
+`15 + active_landmarks * 3` and `active_covariance()` returns the active top-left
+view. It also defines `kRobotDim = 15` and `kLandmarkDim = 3`. It does not yet
+own landmark IDs, landmark positions, compaction, propagation, or augmentation
+math.
 
 `propagation.hpp` exposes `PropagationResult` and `propagate(...)`, which
 returns `ParseResult<PropagationResult>`. The propagation function takes a
@@ -101,7 +120,11 @@ Monte Carlo error covariance. It also smoke-tests one second of IMU-only
 propagation on the checked-in `MH_01_easy` sequence against nearby ground truth
 with loose sanity bounds.
 `tests/state_test.cpp` verifies that `state.hpp` exposes the nominal-state
-member types.
+member types and the IMU-only covariance alias boundary.
+`tests/slam_state_test.cpp` verifies that `SlamState` allocates the full
+maximum covariance once, tracks active dimension separately from allocated
+capacity, rejects active landmark counts beyond capacity, and supports
+fixed-size landmark covariance block access at nonzero offsets.
 `tests/synthetic_test.cpp` verifies synthetic IMU timestamp spacing, sample-grid
 retention and truncation, ground-truth sampling, a shared time origin across
 streams, bias plumbing from trajectory to stream, invalid-configuration
@@ -142,6 +165,8 @@ agreement between injected noise and the calibration densities.
   set with varied depths.
 - `synthesize_stereo_observations(...)` — public. Samples `SyntheticStereoObservation`
   records from analytic truth and a rectified stereo camera calibration.
+- `SlamState(max_landmarks)` — public. Allocates a joint covariance sized for
+  the maximum metric-XYZ landmark budget and exposes active-dimension helpers.
 
 Lower-level YAML, CSV, and stereo-pair parsing functions are private
 implementation details in `parser_yaml.cpp` and `parser_csv.cpp`. Planned future
@@ -199,6 +224,15 @@ Three commitments drive most of the rest:
 
 ### Numerical choices in propagation
 
+- **`F` is continuous-time dynamics; `Phi` is the discrete step matrix.** `F`
+  says how an infinitesimal error state changes per second at the current
+  nominal state. It has units of "per second" in its non-identity coupling
+  blocks. `Phi` says how the error moves across one actual IMU interval, so it
+  is dimensionless and appears directly in `P_new = Phi P Phi^T + Q_d`. The
+  current implementation uses the first-order discretization `Phi = I + F dt`.
+  When landmarks are present, only the robot block has dynamics during IMU
+  propagation: `P_rr` uses `Phi_rr P_rr Phi_rr^T + Q_d`, robot-landmark
+  covariance uses `Phi_rr P_rl`, and landmark-landmark covariance is unchanged.
 - **Covariance transition `Phi = I + F dt`, first order.** Alternatives are the
   matrix exponential of `F dt`, a truncated series to second or third order, or
   Van Loan's method (which yields `Phi` and the exact `Q_d` from a single
@@ -259,15 +293,63 @@ Three commitments drive most of the rest:
   Designated-initializer construction keeps the propagation step readable and
   makes the field order explicit at every call site. There is no constructor
   enforcing, for example, a normalized quaternion, because Sophus owns that.
-- **Fixed 15x15 `StateCovariance` (`Eigen::Matrix<double, 15, 15>`).** Fixed
+- **Fixed 15x15 `ImuStateCovariance` (`Eigen::Matrix<double, 15, 15>`).** Fixed
   size means stack allocation and full inlining, and it is what makes a
-  propagation step ~1.9 us. The cost is that adding landmarks to the state
-  cannot reuse this type — inverse-depth landmarks will force either a dynamic
-  matrix or a fixed-max-size block layout, and that is an open decision.
+  propagation step ~1.9 us. The older `StateCovariance` name is kept only as a
+  compatibility alias for the current IMU-only path; new SLAM code should use
+  explicit robot/joint-state names. The landmark filter will use a joint
+  covariance allocated once at
+  `(15 + N_max * 3) x (15 + N_max * 3)` and operate only on the active
+  `15 + active_landmarks * 3` top-left block.
 - **`double` throughout.** Float would halve memory traffic and vectorize wider
   on the Jetson, but covariance propagation over long horizons is exactly where
   precision loss shows up as a non-positive-definite `P`. Revisit only with a
   profile that says it matters.
+
+### Planned landmark-state decisions
+
+These choices are not implemented yet, but they are settled design direction for
+the next state-augmentation work and replace earlier inverse-depth planning.
+
+- **Metric XYZ landmarks from stereo triangulation.** Each landmark will add a
+  3-dimensional Euclidean position in the world frame. This directly matches the
+  stereo harness and EuRoC's synchronized stereo setup, keeps Jacobians compact,
+  and makes state growth predictable. Inverse depth was the original plan
+  because it better conditions far points and usually gives a more Gaussian
+  depth error, especially for monocular or long-range initialization. For this
+  bounded stereo project, its extra parameters, anchored-frame bookkeeping, and
+  more subtle Jacobians are not worth the complexity. If the project later moves
+  to larger spatial scale, long-range landmarks, or monocular initialization,
+  inverse depth should be reconsidered.
+- **Classic EKF-SLAM with a bounded active map.** Landmarks will live in the
+  filter state, so the covariance grows as `O(n^2)` in the active landmark
+  count. This is intentional for the first full SLAM implementation because it
+  keeps the estimator math direct and testable. MSCKF remains the standard
+  bounded-compute alternative for production VIO, but switching to it would be a
+  structural change, not an incremental refactor.
+- **Preallocated joint covariance with active dimension.** The SLAM state should
+  allocate the full maximum covariance once, using
+  `(15 + N_max * 3) x (15 + N_max * 3)` storage. Landmark insertion changes the
+  active dimension and writes into already-allocated blocks; it should not
+  resize the matrix in the IMU or camera update path. `SlamState` implements the
+  storage and active-dimension part of this decision; landmark insertion and
+  removal policy are not implemented yet.
+- **ID-based landmark registry.** Landmark IDs are external identities, not
+  state indices. All landmark state and covariance access should go through an
+  `id -> state offset` registry so data association and removal cannot silently
+  corrupt covariance blocks.
+- **Batch compaction for removal.** Landmark removal will compact all survivors
+  in one pass and rebuild the registry. A free-list design would keep offsets
+  stable, but it pushes holes into every propagation, update, and debugging path.
+  Dense active storage keeps `active_dim` meaningful and is the simpler choice
+  unless profiling later proves compaction is a bottleneck.
+- **Shared robot propagation math, separate public paths.** The current
+  `propagate(...)` API can remain as the IMU-only test/development path while
+  SLAM propagation grows a joint-state API. Both should call the same internal
+  robot transition/noise builder so `F`, `Phi`, and `Q_d` are not duplicated.
+  Putting every mode into one public function would work mechanically, but it
+  would blur two different contracts: fixed 15x15 IMU-only propagation versus
+  joint covariance propagation with landmark cross-block invariants.
 
 ### Error handling and API shape
 
@@ -409,19 +491,6 @@ These are not implemented and not settled. They are recorded here so the
 tradeoffs are visible before the code exists, and each should move into the
 sections above (or out of this file) once it is actually built.
 
-- **Landmark parameterization.** [scope.md](scope.md) commits to inverse depth,
-  which conditions well for distant points and permits initialization from a
-  single observation. Alternatives: Euclidean XYZ (simpler Jacobians, badly
-  conditioned at depth), anchored inverse depth (better linearity, more
-  bookkeeping), or a stereo-triangulated XYZ point given the rig already
-  provides depth. The stereo baseline weakens the usual argument for inverse
-  depth and this should be re-evaluated before implementation.
-- **Filter structure for landmarks.** Classic EKF-SLAM keeps landmarks in the
-  state, giving `O(n^2)` covariance growth. MSCKF keeps a sliding window of
-  *poses* instead and marginalizes landmarks out at update time, which is what
-  most real VIO systems on constrained hardware do. The current 15-state,
-  fixed-size covariance assumes the classic form; switching to MSCKF later is a
-  structural change, not an incremental one.
 - **Update linearization.** EKF vs. iterated EKF vs. an observability-constrained
   variant. Standard VIO EKFs gain spurious yaw observability from linearizing
   about different states at different times; OC-EKF or a first-estimates-Jacobian
@@ -435,10 +504,11 @@ sections above (or out of this file) once it is actually built.
   open. KLT is cheaper and gives sub-pixel tracks on high-rate imagery;
   descriptors survive larger baselines and re-detection. This choice interacts
   with the landmark parameterization and with the Jetson budget.
-- **Covariance storage as landmarks arrive.** Dynamic-size Eigen matrices
-  (allocations in the update path), a fixed maximum landmark count (bounded
-  memory, wasted work), or a square-root/UD factorization (better numerical
-  behavior, more code). Related: whether to switch to a Joseph-form update.
+- **Measurement-update covariance form.** The landmark-state plan uses a
+  preallocated dense covariance, but the update formula itself is still open:
+  standard covariance update, Joseph form, or eventually a square-root/UD
+  factorization. Joseph form is the likely first upgrade once camera updates
+  start subtracting information from `P`.
 - **State injection and reset.** After each update the error state is injected
   into the nominal state and reset to zero, which requires a covariance
   reset Jacobian for the rotation block. Skipping the Jacobian is common and
@@ -466,11 +536,13 @@ behavior yet.
 
 ## Tests
 
-42 GoogleTest cases across four binaries, run through CTest:
+48 GoogleTest cases across five binaries, run through CTest:
 
 - `tests/parser_test.cpp` — inline YAML/CSV fixtures plus a smoke test against
   `datasets/machine_hall/MH_01_easy`.
 - `tests/state_test.cpp` — public state-header declarations.
+- `tests/slam_state_test.cpp` — preallocated SLAM state storage and active
+  covariance views.
 - `tests/propagation_test.cpp` — nominal integration, covariance transition and
   process-noise blocks, timestep validation, a Monte Carlo covariance
   consistency check, and a 1 s EuRoC IMU-only smoke test.

@@ -10,6 +10,13 @@ TEST(StateTypesTest, DeclaresNominalState) {
     EXPECT_TRUE(std::is_class_v<NominalState>);
 }
 
+TEST(StateTypesTest, DeclaresImuOnlyErrorStateCovariance) {
+    EXPECT_EQ(kImuErrorStateSize, 15);
+    EXPECT_EQ(ImuStateCovariance::RowsAtCompileTime, kImuErrorStateSize);
+    EXPECT_EQ(ImuStateCovariance::ColsAtCompileTime, kImuErrorStateSize);
+    EXPECT_TRUE((std::is_same_v<StateCovariance, ImuStateCovariance>));
+}
+
 TEST(StateTypesTest, NominalStateContainsPoseVelocityAndBiases) {
     EXPECT_TRUE((std::is_same_v<decltype(&NominalState::position), Eigen::Vector3d NominalState::*>));
     EXPECT_TRUE((std::is_same_v<decltype(&NominalState::velocity), Eigen::Vector3d NominalState::*>));

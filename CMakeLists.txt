@@ -90,6 +90,25 @@ if(BUILD_TESTING)
 
     gtest_discover_tests(state_tests)
 
+    add_executable(slam_state_tests
+        tests/slam_state_test.cpp
+    )
+
+    target_link_libraries(slam_state_tests
+        PRIVATE
+            ekf_slam_parser
+            GTest::gtest_main
+    )
+
+    target_compile_options(slam_state_tests
+        PRIVATE
+            -Wall
+            -Wextra
+            -Werror
+    )
+
+    gtest_discover_tests(slam_state_tests)
+
     add_executable(propagation_tests
         tests/propagation_test.cpp
     )

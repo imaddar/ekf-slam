@@ -4,12 +4,13 @@ Presentation material for this project. Follows the standard deep-dive outline:
 problem, approach, implementation, metrics, results, lessons, contribution.
 
 **Status as of 2026-08-14.** Implemented: EuRoC dataset parser, nominal ESEKF
-state, IMU propagation of state and covariance, a synthetic ground-truth
-harness, and 42 tests. Not implemented: camera measurement update, landmarks,
-ATE/RPE/NEES evaluation, ROS 2, Jetson deployment. Every number below is
-measured; nothing is projected. Keep that boundary explicit when presenting —
-the strongest thing to show right now is *verification methodology on a
-half-built filter*, not a finished SLAM system.
+state, IMU propagation of state and covariance, storage for a bounded joint SLAM
+state, a synthetic ground-truth harness, and 48 tests. Not implemented: landmark
+registry, state augmentation, camera measurement update, ATE/RPE/NEES
+evaluation, ROS 2, Jetson deployment. Every number below is measured; nothing is
+projected. Keep that boundary explicit when presenting — the strongest thing to
+show right now is *verification methodology on a half-built filter*, not a
+finished SLAM system.
 
 ---
 
@@ -148,8 +149,9 @@ no ROS dependency yet, no third-party parser.
 
 ```
 parser.cpp / parser_yaml.cpp / parser_csv.cpp   EuRoC loading (hand-written YAML + CSV)
-state.hpp                                       NominalState, 15x15 StateCovariance
-propagation.cpp                                 IMU nominal + covariance propagation
+state.hpp                                       NominalState, IMU-only ImuStateCovariance
+propagation.cpp                                 IMU-only nominal + covariance propagation
+slam_state.hpp                                  bounded joint SLAM covariance storage
 synthetic.cpp                                   analytic trajectory, IMU, stereo generator
 ```
 
@@ -170,6 +172,13 @@ One IMU sample in, updated state and covariance out:
 5. **Discretize and propagate**: `Phi = I + F dt`, then
    `P <- Phi P Phi^T + G Q G^T dt`, with `Q` built from the EuRoC noise
    densities and random walks.
+
+Useful explanation for questions: `F` is the continuous-time error dynamics at
+the current nominal state; `Phi` is the one-step discrete transition applied to
+the covariance. In the current first-order implementation, `Phi = I + F dt`.
+When landmarks are added, the same robot `Phi` propagates the robot block and
+the robot-landmark cross blocks, while landmark-landmark covariance stays fixed
+during IMU-only prediction.
 
 Measured cost: **1.84–1.91 us per call** on the dev machine, against a 5,000 us
 budget at 200 Hz. Fixed-size Eigen types mean no heap allocation in the step.
@@ -398,14 +407,22 @@ on the build type.
 
 **Immediate (finishes Phase 1):**
 
-- Camera measurement update: feature tracking, inverse-depth landmark
-  initialization, EKF update, marginalization.
+- Camera measurement update: feature tracking, metric XYZ landmark
+  initialization from stereo triangulation, EKF update, marginalization.
 - ATE / RPE / NEES evaluation across MH_01–V2_03. NEES is the one that closes
   the loop on the covariance work above — the Monte Carlo test proves the
   propagated covariance is self-consistent; NEES proves it is consistent with
   *reality*.
 - Chi-square innovation gating. A VIO filter without outlier rejection fails on
   the first bad match.
+
+**Landmark-state direction:** use classic EKF-SLAM with a bounded active map.
+Allocate the joint covariance once at `(15 + N_max * 3)^2`, track the active
+dimension, initialize stereo landmarks as 3D metric XYZ points, and remove
+landmarks by batch compaction. Inverse depth stays a future option for larger
+scales, long-range points, or monocular initialization, where its better depth
+conditioning may justify the extra parameterization and anchored-frame
+bookkeeping.
 
 **Numerical upgrades, each with a metric that would show the payoff:**
 
