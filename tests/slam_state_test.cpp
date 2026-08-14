@@ -87,15 +87,15 @@ TEST(SlamStateTest, RobotCovarianceBlockRoundTripsThroughAccessor) {
     EXPECT_TRUE(state.active_covariance().isApprox(expected, 0.0));
 }
 
-#ifndef NDEBUG
-TEST(SlamStateTest, DebugBuildPoisonsInactiveCovarianceRegion) {
+TEST(SlamStateTest, PoisonsInactiveCovarianceRegion) {
     const auto result = make_state(2);
 
     ASSERT_TRUE(result) << result.error();
     const auto& covariance = SlamStateTestAccess::covariance(*result);
-    const int inactive_dim = covariance.rows() - kRobotDim;
+    const int storage_dim = covariance.rows();
+    const int inactive_dim = storage_dim - kRobotDim;
 
     ASSERT_GT(inactive_dim, 0);
-    EXPECT_TRUE(covariance.block(kRobotDim, kRobotDim, inactive_dim, inactive_dim).array().isNaN().all());
+    EXPECT_TRUE(covariance.block(kRobotDim, 0, inactive_dim, storage_dim).array().isNaN().all());
+    EXPECT_TRUE(covariance.block(0, kRobotDim, kRobotDim, inactive_dim).array().isNaN().all());
 }
-#endif

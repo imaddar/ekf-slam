@@ -63,7 +63,7 @@ Implement the future SLAM state container.
   caller. The new container must preserve that contract rather than inventing
   an uncertainty value. Zero-initialization is therefore not a valid default.
 - The covariance region beyond the active dimension is undefined. It is written
-  by augmentation and must never be read before that. Assert this rather than
+  by augmentation and must never be read before that. NaN-poison it rather than
   relying on zero-fill.
 
 ### Gate 1
@@ -73,8 +73,7 @@ Implement the future SLAM state container.
 - The source of initial `P_rr` is documented, and a test asserts that the
   caller-supplied covariance is preserved exactly.
 - Covariance dimensions are correct for multiple `N_max` values.
-- The active robot view has the expected dimensions and its data pointer is
-  stable after construction.
+- The active robot view has the expected dimensions.
 - Fixed-size robot-block read/write round-trips through an accessor.
 - No public API permits reallocation of the covariance storage.
 
@@ -91,15 +90,13 @@ remove test coverage that asserts less than its name claims.
 
 ### Work
 
-- **NaN-fill the region beyond the robot block in debug builds.** The
-  constructor allocates without initializing and writes only `P_rr`, so the
-  landmark region currently holds indeterminate values. This is the intended
-  "undefined beyond active dimension" semantics, but the plan pairs it with an
-  assertion and none exists. Zeros were wrong-but-quiet; indeterminate values
-  are wrong-and-silent until they reach filter math. A debug-only
-  `quiet_NaN` fill turns a premature read into an immediate `allFinite()`
-  failure at the point of the bug rather than several steps downstream. Release
-  builds leave the region untouched so construction cost is unchanged.
+- **NaN-fill the region beyond the robot block in every build.** The constructor
+  allocates without initializing and writes only `P_rr`, so the landmark region
+  currently holds indeterminate values. Zeros were wrong-but-quiet;
+  indeterminate values were wrong-and-silent until they reached filter math. An
+  unconditional `quiet_NaN` fill makes a premature read fail at the point of
+  the bug in the default release-style build as well as in Debug. This runs
+  once at container construction, not in the 200 Hz propagation loop.
 - **Verify the fill without widening the public API.** Declare the test fixture
   a friend rather than adding a public accessor to storage. A public
   `storage_covariance()` would reopen exactly the hole Step 1 closed.
@@ -126,9 +123,10 @@ remove test coverage that asserts less than its name claims.
 
 ### Gate 1a
 
-- A debug build fills the region beyond `kRobotDim` with `NaN` at construction,
+- Every build fills the region beyond `kRobotDim` with `NaN` at construction,
   verified for at least one `N_max >= 1`.
-- A release build is unaffected; the fill is behind `NDEBUG`.
+- The test covers both robot-landmark cross strips and the landmark-landmark
+  block; the robot block remains finite and caller-initialized.
 - No public accessor reaches storage beyond the active dimension.
 - `create(...)` requires both initial `P_rr` and initial `NominalState`, and a
   test asserts both are preserved exactly.

@@ -542,7 +542,7 @@ behavior yet.
 
 ## Tests
 
-47 GoogleTest cases across five binaries, run through CTest:
+48 GoogleTest cases across five binaries, run through CTest:
 
 - `tests/parser_test.cpp` — inline YAML/CSV fixtures plus a smoke test against
   `datasets/machine_hall/MH_01_easy`.

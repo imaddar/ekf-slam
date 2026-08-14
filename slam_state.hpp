@@ -82,9 +82,7 @@ private:
           covariance_{storage_dim, storage_dim},
           storage_dim_{storage_dim},
           max_landmarks_{max_landmarks} {
-#ifndef NDEBUG
         covariance_.setConstant(std::numeric_limits<double>::quiet_NaN());
-#endif
         robot_covariance() = initial_robot_covariance;
     }
 
