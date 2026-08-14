@@ -26,7 +26,7 @@ Build a real-time visual-inertial EKF-SLAM system from scratch in C++, evaluated
 
 ### Phase 1 — Offline ESEKF (Weeks 1–10)
 
-Single-threaded, runs against recorded EuRoC sequences. Deliverable: ATE/RPE benchmark results.
+Single-threaded, runs against recorded EuRoC sequences. Deliverable: ATE/RPE/NEES benchmark results.
 
 #### Week 1–2: EuRoC Dataset Parser
 - [x] Top-level `Dataset` struct
@@ -36,13 +36,16 @@ Single-threaded, runs against recorded EuRoC sequences. Deliverable: ATE/RPE ben
 - [x] `StereoPair` — timestamp, cam0/cam1 image paths (CSV)
 - [x] `GroundTruthState` — timestamp, position, orientation, velocity, biases (CSV)
 - [x] YAML parsing for EuRoC `sensor.yaml` files with T_BS shape validation
-- [ ] Error handling: fail fast on missing files, malformed data, IMU gaps; survive camera frame gaps
+- [x] Error handling: fail fast on missing files and malformed YAML/CSV records
+- [ ] Error handling: detect IMU gaps against the expected rate; survive camera frame gaps
 
 #### Week 3–5: IMU Propagation
 - [x] ESEKF state and covariance definition
 - [x] Continuous-time IMU model discretization
 - [x] Propagation step at 200 Hz
 - [x] Bias integration
+- [x] Synthetic trajectory / IMU / stereo harness for controlled validation
+- [x] Monte Carlo covariance consistency check and EuRoC propagation smoke test
 
 #### Week 6–8: Camera Measurement Update
 - [ ] Feature detection and tracking (decide: KLT vs descriptor-based)
@@ -53,6 +56,7 @@ Single-threaded, runs against recorded EuRoC sequences. Deliverable: ATE/RPE ben
 #### Week 9–10: Benchmarking
 - [ ] ATE (Absolute Trajectory Error) computation
 - [ ] RPE (Relative Pose Error) computation
+- [ ] NEES (Normalized Estimation Error Squared)
 - [ ] Evaluation against EuRoC sequences (MH_01 through V2_03)
 - [ ] Results writeup
 

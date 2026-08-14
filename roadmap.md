@@ -41,7 +41,9 @@ syntax" from "valid records that do not form a usable sensor dataset."
 Initial checks should include:
 
 - Monotonic timestamps for IMU measurements, stereo pairs, and ground-truth
-  states.
+  states. This is now load-bearing rather than cosmetic: `propagate(...)`
+  rejects a negative `dt`, so an out-of-order IMU record fails mid-run instead
+  of at load time.
 - IMU gap detection against the expected IMU rate.
 - Stereo frame count/timestamp consistency, preserving the current hard fail for
   mismatched cam0/cam1 timestamps.
