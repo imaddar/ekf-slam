@@ -4,7 +4,7 @@ Presentation material for this project. Follows the standard deep-dive outline:
 problem, approach, implementation, metrics, results, lessons, contribution.
 
 **Status as of 2026-08-14.** Implemented: EuRoC dataset parser, nominal ESEKF
-state, joint covariance propagation, a synthetic ground-truth harness, and 58
+state, joint covariance propagation, a synthetic ground-truth harness, and 59
 tests. Not implemented: state augmentation, camera measurement update, ATE/RPE/NEES
 evaluation, ROS 2, Jetson deployment. Every number below is measured; nothing is
 projected. Keep that boundary explicit when presenting — the strongest thing to

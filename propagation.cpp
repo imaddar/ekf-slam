@@ -92,6 +92,7 @@ ParseResult<RobotPropagationTerms> build_robot_propagation_terms(
     noise_jacobian.block<kBlockSize, kBlockSize>(kGyroscopeBiasIndex, kGyroBiasNoiseIndex) =
         Eigen::Matrix3d::Identity();
 
+    // EuRoC calibration stores noise densities and random walks; Q uses their variances.
     RawNoiseCovariance raw_noise = RawNoiseCovariance::Zero();
     raw_noise.block<kBlockSize, kBlockSize>(kAccelNoiseIndex, kAccelNoiseIndex) =
         imu_calibration.accelerometer_noise_density * imu_calibration.accelerometer_noise_density
@@ -155,20 +156,13 @@ ParseResult<void> propagate_slam(
         const ImuStateCovariance updated_robot_covariance =
             terms->discrete_transition * slam_state.robot_covariance()
             * terms->discrete_transition.transpose() + terms->process_noise;
-        auto robot_landmark_covariance = slam_state.robot_landmark_covariance();
-        for (int offset = 0; offset < robot_landmark_covariance.cols(); offset += kLandmarkDim) {
-            const Eigen::Matrix<double, kRobotDim, kLandmarkDim> old_block =
-                robot_landmark_covariance.middleCols<kLandmarkDim>(offset);
-            robot_landmark_covariance.middleCols<kLandmarkDim>(offset) =
-                terms->discrete_transition * old_block;
+        const auto covariance_result = slam_state.apply_robot_transition(terms->discrete_transition);
+        if (!covariance_result) {
+            return std::unexpected(covariance_result.error());
         }
 
         slam_state.robot = terms->updated_state;
         slam_state.robot_covariance() = updated_robot_covariance;
-        const auto covariance_result = slam_state.set_robot_landmark_covariance(robot_landmark_covariance);
-        if (!covariance_result) {
-            return std::unexpected(covariance_result.error());
-        }
     } catch (const std::bad_alloc&) {
         return std::unexpected("slam propagation: covariance allocation failed");
     }

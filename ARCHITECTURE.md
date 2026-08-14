@@ -187,6 +187,9 @@ agreement between injected noise and the calibration densities.
   views of `P_rl` and `P_ll`; inactive landmark capacity is excluded.
 - `SlamState::set_robot_landmark_covariance(covariance)` — public. Validates and
   writes `P_rl` and its symmetric `P_lr` counterpart together.
+- `SlamState::apply_robot_transition(transition)` — public. Validates all
+  transformed cross-covariance blocks before atomically applying the transition
+  and mirroring both covariance strips.
 - `SlamState::add_landmark(id, position, covariance_column)` — public. Adds a
   finite metric XYZ landmark and its complete new covariance column to the next
   dense active slot. The column is shaped `(active_dim + 3) x 3` before the
@@ -588,7 +591,7 @@ behavior yet.
 
 ## Tests
 
-58 GoogleTest cases across five binaries, run through CTest:
+59 GoogleTest cases across five binaries, run through CTest:
 
 - `tests/parser_test.cpp` — inline YAML/CSV fixtures plus a smoke test against
   `datasets/machine_hall/MH_01_easy`.

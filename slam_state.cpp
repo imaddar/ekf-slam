@@ -109,6 +109,31 @@ ParseResult<void> SlamState::set_robot_landmark_covariance(
     return {};
 }
 
+ParseResult<void> SlamState::apply_robot_transition(const ImuStateCovariance& transition) {
+    if (!transition.allFinite()) {
+        return std::unexpected("robot_transition: expected finite values");
+    }
+
+    const auto covariance = robot_landmark_covariance();
+    for (int offset = 0; offset < covariance.cols(); offset += kLandmarkDim) {
+        const Eigen::Matrix<double, kRobotDim, kLandmarkDim> updated =
+            transition * covariance.middleCols<kLandmarkDim>(offset);
+        if (!updated.allFinite()) {
+            return std::unexpected("robot_landmark_covariance: transition produced non-finite values");
+        }
+    }
+
+    auto mutable_covariance = robot_landmark_covariance();
+    for (int offset = 0; offset < mutable_covariance.cols(); offset += kLandmarkDim) {
+        // Keep this temporary: callers may provide a view that aliases the destination.
+        const Eigen::Matrix<double, kRobotDim, kLandmarkDim> updated =
+            transition * mutable_covariance.middleCols<kLandmarkDim>(offset);
+        mutable_covariance.middleCols<kLandmarkDim>(offset) = updated;
+        covariance_.block<kLandmarkDim, kRobotDim>(kRobotDim + offset, 0) = updated.transpose();
+    }
+    return {};
+}
+
 ParseResult<void> SlamState::add_landmark(
     LandmarkId id,
     const Eigen::Vector3d& position,

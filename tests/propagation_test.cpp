@@ -183,6 +183,38 @@ TEST(PropagationTest, JointPropagationWithNoLandmarksMatchesImuOnlyPath) {
     EXPECT_TRUE(slam_state.robot_covariance().isApprox(reference->covariance, 0.0));
 }
 
+TEST(PropagationTest, JointPropagationFailureLeavesStateUntouched) {
+    const auto initial = SlamState::create(1, make_state(), StateCovariance::Identity());
+    ASSERT_TRUE(initial) << initial.error();
+    SlamState slam_state = std::move(*initial);
+    const Eigen::MatrixXd covariance_column = Eigen::MatrixXd::Zero(
+        kRobotDim + kLandmarkDim, kLandmarkDim);
+    ASSERT_TRUE(slam_state.add_landmark(10, Eigen::Vector3d{1.0, 2.0, 3.0}, covariance_column));
+    slam_state.active_covariance().setIdentity();
+    slam_state.robot_landmark_covariance()(0, 0) = std::numeric_limits<double>::quiet_NaN();
+
+    const NominalState old_robot = slam_state.robot;
+    const StateCovariance old_robot_covariance = slam_state.robot_covariance();
+    const Eigen::MatrixXd old_landmark_robot_covariance =
+        slam_state.active_covariance().bottomLeftCorner(kLandmarkDim, kRobotDim);
+    const ImuMeasurement measurement{
+        .timestamp = 1403636579758555392,
+        .acceleration = Eigen::Vector3d{1.0, 2.0, 12.81},
+        .angular_velocity = Eigen::Vector3d{0.1, 0.2, 0.3},
+    };
+
+    const auto result = propagate_slam(
+        slam_state, measurement, make_imu_calibration(), 0.005);
+    ASSERT_FALSE(result);
+    EXPECT_TRUE(slam_state.robot.position.isApprox(old_robot.position, 0.0));
+    EXPECT_TRUE(slam_state.robot.velocity.isApprox(old_robot.velocity, 0.0));
+    EXPECT_TRUE(slam_state.robot.orientation.matrix().isApprox(old_robot.orientation.matrix(), 0.0));
+    EXPECT_TRUE(slam_state.robot_covariance().isApprox(old_robot_covariance, 0.0));
+    EXPECT_EQ(slam_state.robot_landmark_covariance().array().isNaN().count(), 1);
+    EXPECT_TRUE(slam_state.active_covariance().bottomLeftCorner(kLandmarkDim, kRobotDim)
+        .isApprox(old_landmark_robot_covariance, 0.0));
+}
+
 TEST(PropagationTest, KeepsStationaryStateWhenSpecificForceBalancesGravity) {
     const auto state = make_state();
     const auto imu_calibration = make_imu_calibration();

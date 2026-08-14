@@ -53,6 +53,7 @@ public:
     ConstLandmarkLandmarkBlock landmark_landmark_covariance() const;
     ParseResult<void> set_robot_landmark_covariance(
         const Eigen::Ref<const Eigen::MatrixXd>& covariance);
+    ParseResult<void> apply_robot_transition(const ImuStateCovariance& transition);
 
     ParseResult<void> add_landmark(
         LandmarkId id,
