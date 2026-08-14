@@ -6,6 +6,12 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Eigen relies on optimization to vectorize and to inline its expression
+# templates; an unoptimized build runs the filter and its tests ~50x slower.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
+endif()
+
 find_package(Eigen3 REQUIRED)
 find_package(Sophus REQUIRED)
 
@@ -14,6 +20,7 @@ add_library(ekf_slam_parser
     parser.cpp
     parser_yaml.cpp
     propagation.cpp
+    synthetic.cpp
 )
 
 target_include_directories(ekf_slam_parser
@@ -106,4 +113,23 @@ if(BUILD_TESTING)
     )
 
     gtest_discover_tests(propagation_tests)
+
+    add_executable(synthetic_tests
+        tests/synthetic_test.cpp
+    )
+
+    target_link_libraries(synthetic_tests
+        PRIVATE
+            ekf_slam_parser
+            GTest::gtest_main
+    )
+
+    target_compile_options(synthetic_tests
+        PRIVATE
+            -Wall
+            -Wextra
+            -Werror
+    )
+
+    gtest_discover_tests(synthetic_tests)
 endif()

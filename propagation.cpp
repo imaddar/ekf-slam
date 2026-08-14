@@ -1,5 +1,8 @@
 #include "propagation.hpp"
 
+#include <cmath>
+#include <format>
+
 namespace {
 
 const Eigen::Vector3d kGravity{0.0, 0.0, -9.81};
@@ -29,12 +32,19 @@ Eigen::Matrix3d skew_symmetric(const Eigen::Vector3d& vector) {
 
 }  // namespace
 
-PropagationResult propagate(
+ParseResult<PropagationResult> propagate(
     const NominalState& nominal_state,
     const ImuMeasurement& measurement,
     const ImuCalibration& imu_calibration,
     double timestep_seconds,
     const StateCovariance& covariance) {
+
+    // Out-of-order IMU samples produce a negative dt, which would subtract
+    // information from P rather than add it. Reject rather than silently drift.
+    if (!std::isfinite(timestep_seconds) || timestep_seconds < 0.0) {
+        return std::unexpected(std::format(
+            "timestep_seconds: expected a finite non-negative timestep, found {}", timestep_seconds));
+    }
 
     // Remove the current bias estimate before using the IMU sample in either update.
     const Eigen::Vector3d acceleration = measurement.acceleration - nominal_state.accelerometer_bias;
@@ -99,7 +109,7 @@ PropagationResult propagate(
     const StateCovariance updated_covariance =
         discrete_transition * covariance * discrete_transition.transpose() + process_noise;
 
-    return {
+    return PropagationResult{
         .nominal_state = updated_state,
         .covariance = updated_covariance,
     };
