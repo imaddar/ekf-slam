@@ -149,11 +149,19 @@ Add landmark bookkeeping independently of filter mathematics.
   arithmetic and add/remove bookkeeping.
 - Store metric XYZ landmark values in the joint state.
 - Maintain an explicit `landmark_id -> active state offset` registry.
+- Maintain a parallel slot-to-ID index so compaction does not reverse-scan the
+  registry. `add_landmark` receives the complete finite new covariance column;
+  it never invents zero robot/landmark cross-covariances.
 - Landmark offsets are computed only inside the registry. No caller performs
   arithmetic on landmark number to reach a state index.
-- Implement batch compaction for removal.
+- Implement batch compaction for removal in place, using fixed-size block
+  temporaries rather than full covariance matrices.
 - Rebuild offsets after compaction.
 - Return an error when removing a missing landmark ID.
+- Reject insertion at maximum capacity; do not reallocate or remove another
+  landmark implicitly.
+- Treat landmark offsets and covariance block views as invalid after add/remove;
+  callers resolve them again after the active layout changes.
 - Active landmark count updates as a consequence of add/remove, and is not
   settable by any other path.
 
@@ -168,13 +176,15 @@ Carried over from Gate 1:
   of the same buffer.
 - The active covariance is fully finite after every add, which is what the
   Step 1a NaN fill exists to detect.
+- Removal re-poisons covariance and position storage beyond the new active
+  dimension, and empty removal is a no-op.
 
 Registry behavior:
 
 - Interior landmark removal preserves all surviving IDs.
 - Landmark state values remain unchanged.
 - Covariance blocks for surviving landmarks remain unchanged.
-- Batch removal performs one compaction pass.
+- Batch removal performs one in-place compaction operation.
 - Missing IDs fail loudly.
 - Add/remove/add behavior is deterministic.
 - Augmentation attempted at `N_max` follows a documented policy — reject, or

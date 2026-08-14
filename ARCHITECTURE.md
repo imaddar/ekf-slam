@@ -177,8 +177,11 @@ agreement between injected noise and the calibration densities.
   exactly.
 - `SlamState::landmark_block(storage_index)` — public. Returns a bounded,
   compile-time-sized `3x3` covariance block view at a capacity slot.
-- `SlamState::add_landmark(id, position)` — public. Adds a finite metric XYZ
-  landmark to the next dense active slot.
+- `SlamState::add_landmark(id, position, covariance_column)` — public. Adds a
+  finite metric XYZ landmark and its complete new covariance column to the next
+  dense active slot. The column is shaped `(active_dim + 3) x 3` before the
+  insertion and must be finite; insertion rejects duplicate IDs and a full
+  capacity.
 - `SlamState::landmark_offset(id)` and `SlamState::landmark_position(id)` —
   public. Resolve an external landmark ID to its state offset or stored position.
 - `SlamState::remove_landmarks(ids)` — public. Removes a batch of IDs with one
@@ -363,13 +366,23 @@ joint covariance propagation and augmentation remain future work.
   it becomes active.
 - **ID-based landmark registry.** Landmark IDs are external identities, not
   state indices. All landmark state and covariance access goes through the
-  `id -> state offset` registry so data association and removal cannot silently
-  corrupt covariance blocks.
+  `id -> state offset` registry, with a parallel slot-to-ID vector for dense
+  compaction, so data association and removal cannot silently corrupt covariance
+  blocks or require a reverse linear scan.
+- **Explicit covariance on landmark insertion.** `add_landmark` requires the
+  complete new covariance column, including robot/landmark and existing
+  landmark cross-covariances. The container does not invent zero correlations;
+  this keeps the active covariance finite without weakening the NaN guard.
 - **Batch compaction for removal.** Landmark removal compacts all survivors in
-  one pass and rebuilds the registry. A free-list design would keep offsets
+  one in-place compaction operation and rebuilds the registry, using fixed-size block temporaries
+  rather than full covariance matrices. A free-list design would keep offsets
   stable, but it pushes holes into every propagation, update, and debugging path.
   Dense active storage keeps `active_dim` meaningful and is the simpler choice
-  unless profiling later proves compaction is a bottleneck.
+  unless profiling later proves compaction is a bottleneck. Capacity exhaustion
+  rejects insertion; it never reallocates or silently removes another landmark.
+- **Structural view invalidation.** Adding or removing a landmark changes the
+  active block layout. Callers must not retain landmark offsets or covariance
+  block views across either operation; they must resolve them again afterward.
 - **Shared robot propagation math, separate public paths.** The current
   `propagate(...)` API can remain as the IMU-only test/development path while
   SLAM propagation grows a joint-state API. Both should call the same internal
@@ -563,13 +576,14 @@ behavior yet.
 
 ## Tests
 
-54 GoogleTest cases across five binaries, run through CTest:
+55 GoogleTest cases across five binaries, run through CTest:
 
 - `tests/parser_test.cpp` — inline YAML/CSV fixtures plus a smoke test against
   `datasets/machine_hall/MH_01_easy`.
 - `tests/state_test.cpp` — public state-header declarations.
 - `tests/slam_state_test.cpp` — SLAM state initialization, bounded covariance
-  blocks, metric XYZ registry operations, and batch compaction.
+  blocks, NaN-tail poisoning, explicit landmark covariance insertion, metric XYZ
+  registry operations, and batch compaction.
 - `tests/propagation_test.cpp` — nominal integration, covariance transition and
   process-noise blocks, timestep validation, a Monte Carlo covariance
   consistency check, and a 1 s EuRoC IMU-only smoke test.

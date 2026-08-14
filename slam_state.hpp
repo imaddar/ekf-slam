@@ -44,7 +44,10 @@ public:
     ActiveBlock active_covariance();
     ConstActiveBlock active_covariance() const;
 
-    ParseResult<void> add_landmark(LandmarkId id, const Eigen::Vector3d& position);
+    ParseResult<void> add_landmark(
+        LandmarkId id,
+        const Eigen::Vector3d& position,
+        const Eigen::MatrixXd& covariance_column);
     ParseResult<int> landmark_offset(LandmarkId id) const;
     ParseResult<Eigen::Vector3d> landmark_position(LandmarkId id) const;
     ParseResult<void> remove_landmarks(std::span<const LandmarkId> ids);
@@ -63,13 +66,12 @@ private:
     static int storage_dim_for(std::size_t max_landmarks);
     static int landmark_offset_for_storage_index(std::size_t storage_index);
 
-    void initialize_landmark_covariance(std::size_t storage_index);
     std::vector<bool> make_removal_mask(const std::vector<std::size_t>& removed_indices) const;
-    LandmarkId landmark_id_for_storage_index(std::size_t storage_index) const;
 
     Eigen::MatrixXd covariance_;
     Eigen::Matrix<double, kLandmarkDim, Eigen::Dynamic> landmark_positions_;
     std::unordered_map<LandmarkId, std::size_t> landmark_indices_;
+    std::vector<LandmarkId> storage_index_to_id_;
     int storage_dim_ = kRobotDim;
     std::size_t max_landmarks_ = 0;
     std::size_t active_landmarks_ = 0;

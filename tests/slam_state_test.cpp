@@ -3,6 +3,7 @@
 #include <climits>
 #include <cstddef>
 #include <array>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -36,6 +37,16 @@ ImuStateCovariance make_initial_covariance() {
 
 auto make_state(std::size_t max_landmarks) {
     return SlamState::create(max_landmarks, make_initial_robot(), make_initial_covariance());
+}
+
+Eigen::MatrixXd make_landmark_covariance_column(const SlamState& state, double seed) {
+    Eigen::MatrixXd covariance_column(state.active_dim() + kLandmarkDim, kLandmarkDim);
+    for (int row = 0; row < covariance_column.rows(); ++row) {
+        for (int column = 0; column < covariance_column.cols(); ++column) {
+            covariance_column(row, column) = seed + row * 10.0 + column;
+        }
+    }
+    return covariance_column;
 }
 
 }
@@ -137,13 +148,13 @@ TEST(SlamStateTest, AddingLandmarksBuildsFiniteActiveStorageWithoutReallocation)
         Eigen::Vector3d{1.0, 2.0, 3.0},
         Eigen::Vector3d{-4.0, 5.0, -6.0}};
 
-    ASSERT_TRUE(state.add_landmark(10, positions[0]));
+    ASSERT_TRUE(state.add_landmark(10, positions[0], make_landmark_covariance_column(state, 100.0)));
     EXPECT_EQ(state.active_landmarks(), 1U);
     EXPECT_EQ(state.active_dim(), kRobotDim + kLandmarkDim);
     EXPECT_EQ(state.active_covariance().data(), allocation);
     EXPECT_TRUE(state.active_covariance().allFinite());
 
-    ASSERT_TRUE(state.add_landmark(20, positions[1]));
+    ASSERT_TRUE(state.add_landmark(20, positions[1], make_landmark_covariance_column(state, 200.0)));
     EXPECT_EQ(state.active_landmarks(), 2U);
     EXPECT_EQ(state.active_covariance().data(), allocation);
     EXPECT_TRUE(state.active_covariance().allFinite());
@@ -156,7 +167,7 @@ TEST(SlamStateTest, LandmarkIdsResolveToOffsetsAndPositions) {
     SlamState state = std::move(*result);
     const Eigen::Vector3d position{7.0, -8.0, 9.0};
 
-    ASSERT_TRUE(state.add_landmark(42, position));
+    ASSERT_TRUE(state.add_landmark(42, position, make_landmark_covariance_column(state, 100.0)));
     const auto offset = state.landmark_offset(42);
     const auto stored_position = state.landmark_position(42);
 
@@ -177,12 +188,13 @@ TEST(SlamStateTest, RejectsDuplicateMissingAndOverCapacityLandmarks) {
     SlamState state = std::move(*result);
     const Eigen::Vector3d position{1.0, 2.0, 3.0};
 
-    ASSERT_TRUE(state.add_landmark(1, position));
-    const auto duplicate = state.add_landmark(1, position);
+    ASSERT_TRUE(state.add_landmark(1, position, make_landmark_covariance_column(state, 100.0)));
+    const auto duplicate = state.add_landmark(
+        1, position, make_landmark_covariance_column(state, 200.0));
     ASSERT_FALSE(duplicate);
     EXPECT_NE(duplicate.error().find("duplicate"), std::string::npos);
 
-    const auto full = state.add_landmark(2, position);
+    const auto full = state.add_landmark(2, position, make_landmark_covariance_column(state, 300.0));
     ASSERT_FALSE(full);
     EXPECT_NE(full.error().find("capacity"), std::string::npos);
 
@@ -205,7 +217,8 @@ TEST(SlamStateTest, BatchRemovalCompactsSurvivorsAndRebuildsOffsets) {
         Eigen::Vector3d{10.0, 11.0, 12.0}};
 
     for (std::size_t index = 0; index < ids.size(); ++index) {
-        ASSERT_TRUE(state.add_landmark(ids[index], positions[index]));
+        ASSERT_TRUE(state.add_landmark(
+            ids[index], positions[index], make_landmark_covariance_column(state, 100.0 + index)));
     }
 
     const int old_active_dim = state.active_dim();
@@ -257,6 +270,33 @@ TEST(SlamStateTest, BatchRemovalCompactsSurvivorsAndRebuildsOffsets) {
         }
     }
     EXPECT_TRUE(state.active_covariance().isApprox(expected, 0.0));
+
+    const auto& storage = SlamStateTestAccess::covariance(state);
+    const int inactive_dim = state.storage_dim() - state.active_dim();
+    ASSERT_GT(inactive_dim, 0);
+    EXPECT_TRUE(storage.block(state.active_dim(), 0, inactive_dim, state.storage_dim()).array().isNaN().all());
+    EXPECT_TRUE(storage.block(0, state.active_dim(), state.active_dim(), inactive_dim).array().isNaN().all());
+}
+
+TEST(SlamStateTest, RequiresFiniteCompleteLandmarkCovarianceColumn) {
+    const auto result = make_state(1);
+
+    ASSERT_TRUE(result) << result.error();
+    SlamState state = std::move(*result);
+    const Eigen::Vector3d position{1.0, 2.0, 3.0};
+    const Eigen::MatrixXd wrong_shape = Eigen::MatrixXd::Zero(kRobotDim, kLandmarkDim);
+
+    const auto shape_error = state.add_landmark(1, position, wrong_shape);
+    ASSERT_FALSE(shape_error);
+    EXPECT_NE(shape_error.error().find("covariance_column"), std::string::npos);
+    EXPECT_EQ(state.active_landmarks(), 0U);
+
+    Eigen::MatrixXd nonfinite = make_landmark_covariance_column(state, 100.0);
+    nonfinite(0, 0) = std::numeric_limits<double>::quiet_NaN();
+    const auto finite_error = state.add_landmark(1, position, nonfinite);
+    ASSERT_FALSE(finite_error);
+    EXPECT_NE(finite_error.error().find("finite"), std::string::npos);
+    EXPECT_EQ(state.active_landmarks(), 0U);
 }
 
 TEST(SlamStateTest, AddRemoveAddCompactsDeterministically) {
@@ -264,12 +304,15 @@ TEST(SlamStateTest, AddRemoveAddCompactsDeterministically) {
 
     ASSERT_TRUE(result) << result.error();
     SlamState state = std::move(*result);
-    ASSERT_TRUE(state.add_landmark(1, Eigen::Vector3d{1.0, 0.0, 0.0}));
-    ASSERT_TRUE(state.add_landmark(2, Eigen::Vector3d{2.0, 0.0, 0.0}));
+    ASSERT_TRUE(state.add_landmark(
+        1, Eigen::Vector3d{1.0, 0.0, 0.0}, make_landmark_covariance_column(state, 100.0)));
+    ASSERT_TRUE(state.add_landmark(
+        2, Eigen::Vector3d{2.0, 0.0, 0.0}, make_landmark_covariance_column(state, 200.0)));
 
     const std::array<LandmarkId, 1> removed{1};
     ASSERT_TRUE(state.remove_landmarks(removed));
-    ASSERT_TRUE(state.add_landmark(3, Eigen::Vector3d{3.0, 0.0, 0.0}));
+    ASSERT_TRUE(state.add_landmark(
+        3, Eigen::Vector3d{3.0, 0.0, 0.0}, make_landmark_covariance_column(state, 300.0)));
 
     const auto offset_two = state.landmark_offset(2);
     const auto offset_three = state.landmark_offset(3);

@@ -5,7 +5,7 @@ problem, approach, implementation, metrics, results, lessons, contribution.
 
 **Status as of 2026-08-14.** Implemented: EuRoC dataset parser, nominal ESEKF
 state, IMU propagation of state and covariance, storage for a bounded joint SLAM
-state, a synthetic ground-truth harness, and 54 tests. Not implemented: SLAM
+state, a synthetic ground-truth harness, and 55 tests. Not implemented: SLAM
 covariance propagation, state augmentation, camera measurement update, ATE/RPE/NEES
 evaluation, ROS 2, Jetson deployment. Every number below is measured; nothing is
 projected. Keep that boundary explicit when presenting — the strongest thing to
