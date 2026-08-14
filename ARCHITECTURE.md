@@ -55,13 +55,15 @@ dimension.
 
 `slam_state.hpp` defines `SlamState`, the storage-only joint state container for
 the upcoming landmark work. `SlamState::create(...)` requires the caller to
-provide the initial 15x15 robot covariance because the current IMU-only
-propagation API does not define a default initial uncertainty. The container
-owns a `NominalState`, a private preallocated dynamic covariance matrix, a
-maximum landmark budget, and an active landmark count that is reserved for
-registry operations. The allocated covariance dimension is fixed at
-construction as `15 + max_landmarks * 3`; the active robot view is exposed
-through accessors. It also defines `kRobotDim = 15` and `kLandmarkDim = 3`. It
+provide both the initial `NominalState` and the initial 15x15 robot covariance;
+the current IMU-only propagation API does not define defaults for either. The
+container owns a private preallocated dynamic covariance matrix, a maximum
+landmark budget, and an active landmark count reserved for registry operations.
+The allocated covariance dimension is fixed at construction as
+`15 + max_landmarks * 3`; the active robot view is exposed through accessors.
+Storage beyond the active dimension is unconditionally filled with NaN at
+construction so an early read fails visibly instead of looking like a valid
+zero covariance. It also defines `kRobotDim = 15` and `kLandmarkDim = 3`. It
 does not yet own landmark IDs, landmark positions, compaction, propagation, or
 augmentation math.
 
@@ -123,10 +125,10 @@ propagation on the checked-in `MH_01_easy` sequence against nearby ground truth
 with loose sanity bounds.
 `tests/state_test.cpp` verifies that `state.hpp` exposes the nominal-state
 member types and the IMU-only covariance alias boundary.
-`tests/slam_state_test.cpp` verifies explicit robot-covariance initialization,
-capacity validation, stable robot covariance views, fixed-size robot covariance
-access, and the absence of a public resizable covariance member. Landmark
-activation and landmark-block tests belong to the registry stage.
+`tests/slam_state_test.cpp` verifies explicit robot-state and covariance
+initialization, capacity validation, fixed-size robot covariance access, and
+the NaN guard over inactive covariance storage. Landmark activation and
+landmark-block tests belong to the registry stage.
 `tests/synthetic_test.cpp` verifies synthetic IMU timestamp spacing, sample-grid
 retention and truncation, ground-truth sampling, a shared time origin across
 streams, bias plumbing from trajectory to stream, invalid-configuration
@@ -167,9 +169,10 @@ agreement between injected noise and the calibration densities.
   set with varied depths.
 - `synthesize_stereo_observations(...)` — public. Samples `SyntheticStereoObservation`
   records from analytic truth and a rectified stereo camera calibration.
-- `SlamState::create(max_landmarks, initial_robot_covariance)` — public.
-  Fallibly allocates a joint covariance sized for the maximum metric-XYZ
-  landmark budget and preserves the caller-provided robot covariance exactly.
+- `SlamState::create(max_landmarks, initial_robot, initial_robot_covariance)` —
+  public. Fallibly allocates a joint covariance sized for the maximum metric-XYZ
+  landmark budget and preserves both caller-provided robot initialization values
+  exactly.
 
 Lower-level YAML, CSV, and stereo-pair parsing functions are private
 implementation details in `parser_yaml.cpp` and `parser_csv.cpp`. Planned future
@@ -340,6 +343,14 @@ the next state-augmentation work and replace earlier inverse-depth planning.
   supplied explicitly because the current IMU-only propagation path has no
   default uncertainty. Landmark insertion and removal policy are not
   implemented yet.
+- **NaN poison for inactive covariance storage.** The covariance region beyond
+  the active robot/landmark block is filled with `NaN` at construction. This is
+  intentionally unconditional, including the default `RelWithDebInfo` build:
+  zero-fill would silently represent an uninitialized landmark as infinite
+  confidence, while NaN makes an early read fail at the point of misuse. The
+  one-time initialization cost is paid at container construction, not in the
+  200 Hz propagation loop. Landmark augmentation must overwrite a block before
+  it becomes active.
 - **ID-based landmark registry.** Landmark IDs are external identities, not
   state indices. All landmark state and covariance access should go through an
   `id -> state offset` registry so data association and removal cannot silently

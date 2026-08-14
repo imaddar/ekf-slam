@@ -96,6 +96,7 @@ TEST(SlamStateTest, PoisonsInactiveCovarianceRegion) {
     const int inactive_dim = storage_dim - kRobotDim;
 
     ASSERT_GT(inactive_dim, 0);
+    EXPECT_TRUE(covariance.topLeftCorner(kRobotDim, kRobotDim).allFinite());
     EXPECT_TRUE(covariance.block(kRobotDim, 0, inactive_dim, storage_dim).array().isNaN().all());
     EXPECT_TRUE(covariance.block(0, kRobotDim, kRobotDim, inactive_dim).array().isNaN().all());
 }
