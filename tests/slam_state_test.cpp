@@ -138,6 +138,29 @@ TEST(SlamStateTest, LandmarkBlockAccessorUsesCapacityAndCompileTimeDimensions) {
     EXPECT_NE(out_of_capacity.error().find("landmark_block"), std::string::npos);
 }
 
+TEST(SlamStateTest, CrossCovarianceAccessorsCoverOnlyActiveLandmarks) {
+    const auto result = make_state(3);
+
+    ASSERT_TRUE(result) << result.error();
+    SlamState state = std::move(*result);
+    ASSERT_TRUE(state.add_landmark(
+        10, Eigen::Vector3d{1.0, 2.0, 3.0}, make_landmark_covariance_column(state, 100.0)));
+    ASSERT_TRUE(state.add_landmark(
+        20, Eigen::Vector3d{4.0, 5.0, 6.0}, make_landmark_covariance_column(state, 200.0)));
+
+    state.robot_landmark_covariance().setConstant(4.0);
+    state.landmark_landmark_covariance().setIdentity();
+
+    EXPECT_EQ(state.robot_landmark_covariance().rows(), kRobotDim);
+    EXPECT_EQ(state.robot_landmark_covariance().cols(), 2 * kLandmarkDim);
+    EXPECT_EQ(state.landmark_landmark_covariance().rows(), 2 * kLandmarkDim);
+    EXPECT_EQ(state.landmark_landmark_covariance().cols(), 2 * kLandmarkDim);
+    EXPECT_TRUE(state.robot_landmark_covariance().isApprox(
+        Eigen::MatrixXd::Constant(kRobotDim, 2 * kLandmarkDim, 4.0), 0.0));
+    EXPECT_TRUE(state.landmark_landmark_covariance().isApprox(
+        Eigen::MatrixXd::Identity(2 * kLandmarkDim, 2 * kLandmarkDim), 0.0));
+}
+
 TEST(SlamStateTest, AddingLandmarksBuildsFiniteActiveStorageWithoutReallocation) {
     const auto result = make_state(3);
 

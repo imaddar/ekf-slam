@@ -23,6 +23,10 @@ public:
     using ConstRobotBlock = Eigen::Block<const Eigen::MatrixXd, kRobotDim, kRobotDim>;
     using ActiveBlock = Eigen::Block<Eigen::MatrixXd, Eigen::Dynamic, Eigen::Dynamic>;
     using ConstActiveBlock = Eigen::Block<const Eigen::MatrixXd, Eigen::Dynamic, Eigen::Dynamic>;
+    using RobotLandmarkBlock = Eigen::Block<Eigen::MatrixXd, kRobotDim, Eigen::Dynamic>;
+    using ConstRobotLandmarkBlock = Eigen::Block<const Eigen::MatrixXd, kRobotDim, Eigen::Dynamic>;
+    using LandmarkLandmarkBlock = Eigen::Block<Eigen::MatrixXd, Eigen::Dynamic, Eigen::Dynamic>;
+    using ConstLandmarkLandmarkBlock = Eigen::Block<const Eigen::MatrixXd, Eigen::Dynamic, Eigen::Dynamic>;
     using LandmarkBlock = Eigen::Block<Eigen::MatrixXd, kLandmarkDim, kLandmarkDim>;
     using ConstLandmarkBlock = Eigen::Block<const Eigen::MatrixXd, kLandmarkDim, kLandmarkDim>;
 
@@ -43,6 +47,10 @@ public:
     ConstRobotBlock robot_covariance() const;
     ActiveBlock active_covariance();
     ConstActiveBlock active_covariance() const;
+    RobotLandmarkBlock robot_landmark_covariance();
+    ConstRobotLandmarkBlock robot_landmark_covariance() const;
+    LandmarkLandmarkBlock landmark_landmark_covariance();
+    ConstLandmarkLandmarkBlock landmark_landmark_covariance() const;
 
     ParseResult<void> add_landmark(
         LandmarkId id,

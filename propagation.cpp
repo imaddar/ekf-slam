@@ -1,7 +1,10 @@
 #include "propagation.hpp"
 
+#include "slam_state.hpp"
+
 #include <cmath>
 #include <format>
+#include <new>
 
 namespace {
 
@@ -22,6 +25,12 @@ constexpr int kGyroBiasNoiseIndex = 9;
 using NoiseJacobian = Eigen::Matrix<double, kErrorStateSize, kNoiseSize>;
 using RawNoiseCovariance = Eigen::Matrix<double, kNoiseSize, kNoiseSize>;
 
+struct RobotPropagationTerms {
+    NominalState updated_state;
+    StateCovariance discrete_transition;
+    StateCovariance process_noise;
+};
+
 Eigen::Matrix3d skew_symmetric(const Eigen::Vector3d& vector) {
     Eigen::Matrix3d skew;
     skew << 0.0, -vector.z(), vector.y(),
@@ -30,32 +39,22 @@ Eigen::Matrix3d skew_symmetric(const Eigen::Vector3d& vector) {
     return skew;
 }
 
-}  // namespace
-
-ParseResult<PropagationResult> propagate(
+ParseResult<RobotPropagationTerms> build_robot_propagation_terms(
     const NominalState& nominal_state,
     const ImuMeasurement& measurement,
     const ImuCalibration& imu_calibration,
-    double timestep_seconds,
-    const StateCovariance& covariance) {
-
-    // Out-of-order IMU samples produce a negative dt, which would subtract
-    // information from P rather than add it. Reject rather than silently drift.
+    double timestep_seconds) {
     if (!std::isfinite(timestep_seconds) || timestep_seconds < 0.0) {
         return std::unexpected(std::format(
             "timestep_seconds: expected a finite non-negative timestep, found {}", timestep_seconds));
     }
 
-    // Remove the current bias estimate before using the IMU sample in either update.
     const Eigen::Vector3d acceleration = measurement.acceleration - nominal_state.accelerometer_bias;
     const Eigen::Vector3d angular_velocity = measurement.angular_velocity - nominal_state.gyroscope_bias;
-    // IMU acceleration is measured in the body frame; rotate it before adding world gravity.
     const Eigen::Vector3d world_acceleration = nominal_state.orientation * acceleration + kGravity;
     const Eigen::Matrix3d rotation = nominal_state.orientation.matrix();
 
-    // This is the simple constant-input integration step used between adjacent IMU samples.
     NominalState updated_state{
-        // TODO: Benchmark the second-order acceleration term against first-order position integration.
         .position = nominal_state.position + nominal_state.velocity * timestep_seconds
             + 0.5 * world_acceleration * timestep_seconds * timestep_seconds,
         .velocity = nominal_state.velocity + world_acceleration * timestep_seconds,
@@ -64,9 +63,9 @@ ParseResult<PropagationResult> propagate(
         .gyroscope_bias = nominal_state.gyroscope_bias,
     };
 
-    // F is continuous-time here; each 3x3 block maps one small error component into another.
     StateCovariance continuous_transition = StateCovariance::Zero();
-    continuous_transition.block<kBlockSize, kBlockSize>(kPositionIndex, kVelocityIndex) = Eigen::Matrix3d::Identity();
+    continuous_transition.block<kBlockSize, kBlockSize>(kPositionIndex, kVelocityIndex) =
+        Eigen::Matrix3d::Identity();
     continuous_transition.block<kBlockSize, kBlockSize>(kVelocityIndex, kOrientationIndex) =
         -rotation * skew_symmetric(acceleration);
     continuous_transition.block<kBlockSize, kBlockSize>(kVelocityIndex, kAccelerometerBiasIndex) = -rotation;
@@ -75,7 +74,6 @@ ParseResult<PropagationResult> propagate(
     continuous_transition.block<kBlockSize, kBlockSize>(kOrientationIndex, kGyroscopeBiasIndex) =
         -Eigen::Matrix3d::Identity();
 
-    // Start with Phi = I + F dt; higher-order discretization can be evaluated with Q later.
     const StateCovariance discrete_transition =
         StateCovariance::Identity() + continuous_transition * timestep_seconds;
 
@@ -89,7 +87,6 @@ ParseResult<PropagationResult> propagate(
         Eigen::Matrix3d::Identity();
 
     RawNoiseCovariance raw_noise = RawNoiseCovariance::Zero();
-    // EuRoC stores noise densities/random walks, so Q_raw uses their variances.
     raw_noise.block<kBlockSize, kBlockSize>(kAccelNoiseIndex, kAccelNoiseIndex) =
         imu_calibration.accelerometer_noise_density * imu_calibration.accelerometer_noise_density
         * Eigen::Matrix3d::Identity();
@@ -103,14 +100,65 @@ ParseResult<PropagationResult> propagate(
         imu_calibration.gyroscope_random_walk * imu_calibration.gyroscope_random_walk
         * Eigen::Matrix3d::Identity();
 
-    // This first-order Qd keeps the noise model cheap while the exact integral remains future work.
     const StateCovariance process_noise =
         noise_jacobian * raw_noise * noise_jacobian.transpose() * timestep_seconds;
-    const StateCovariance updated_covariance =
-        discrete_transition * covariance * discrete_transition.transpose() + process_noise;
 
+    return RobotPropagationTerms{
+        .updated_state = updated_state,
+        .discrete_transition = discrete_transition,
+        .process_noise = process_noise,
+    };
+}
+
+}  // namespace
+
+ParseResult<PropagationResult> propagate(
+    const NominalState& nominal_state,
+    const ImuMeasurement& measurement,
+    const ImuCalibration& imu_calibration,
+    double timestep_seconds,
+    const StateCovariance& covariance) {
+    const auto terms = build_robot_propagation_terms(
+        nominal_state, measurement, imu_calibration, timestep_seconds);
+    if (!terms) {
+        return std::unexpected(terms.error());
+    }
+
+    const StateCovariance updated_covariance =
+        terms->discrete_transition * covariance * terms->discrete_transition.transpose()
+        + terms->process_noise;
     return PropagationResult{
-        .nominal_state = updated_state,
+        .nominal_state = terms->updated_state,
         .covariance = updated_covariance,
     };
+}
+
+ParseResult<void> propagate_slam(
+    SlamState& slam_state,
+    const ImuMeasurement& measurement,
+    const ImuCalibration& imu_calibration,
+    double timestep_seconds) {
+    const auto terms = build_robot_propagation_terms(
+        slam_state.robot, measurement, imu_calibration, timestep_seconds);
+    if (!terms) {
+        return std::unexpected(terms.error());
+    }
+
+    try {
+        const ImuStateCovariance updated_robot_covariance =
+            terms->discrete_transition * slam_state.robot_covariance()
+            * terms->discrete_transition.transpose() + terms->process_noise;
+        const Eigen::MatrixXd updated_robot_landmark_covariance =
+            terms->discrete_transition * slam_state.robot_landmark_covariance();
+
+        slam_state.robot = terms->updated_state;
+        slam_state.robot_covariance() = updated_robot_covariance;
+        slam_state.robot_landmark_covariance() = updated_robot_landmark_covariance;
+        slam_state.active_covariance().bottomLeftCorner(
+            slam_state.active_dim() - kRobotDim, kRobotDim) = updated_robot_landmark_covariance.transpose();
+    } catch (const std::bad_alloc&) {
+        return std::unexpected("slam propagation: covariance allocation failed");
+    }
+
+    return {};
 }

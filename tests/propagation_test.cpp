@@ -1,5 +1,7 @@
 #include "propagation.hpp"
 
+#include "slam_state.hpp"
+
 #include "parser.hpp"
 
 #include <algorithm>
@@ -21,6 +23,14 @@ constexpr int kOrientationIndex = 6;
 constexpr int kAccelerometerBiasIndex = 9;
 constexpr int kGyroscopeBiasIndex = 12;
 constexpr std::uint64_t kOneSecondNs = 1'000'000'000;
+
+Eigen::Matrix3d skew_symmetric_for_test(const Eigen::Vector3d& vector) {
+    Eigen::Matrix3d skew;
+    skew << 0.0, -vector.z(), vector.y(),
+        vector.z(), 0.0, -vector.x(),
+        -vector.y(), vector.x(), 0.0;
+    return skew;
+}
 
 NominalState make_state() {
     return {
@@ -72,6 +82,94 @@ const GroundTruthState& nearest_ground_truth(
 }
 
 }  // namespace
+
+TEST(PropagationTest, PropagatesJointCovarianceByRobotBlocks) {
+    const auto initial = SlamState::create(2, make_state(), StateCovariance::Identity());
+    ASSERT_TRUE(initial) << initial.error();
+    SlamState slam_state = std::move(*initial);
+    const Eigen::Vector3d first_position{1.0, 2.0, 8.0};
+    const Eigen::Vector3d second_position{-2.0, 4.0, 12.0};
+    const Eigen::MatrixXd first_column = Eigen::MatrixXd::Zero(kRobotDim + kLandmarkDim, kLandmarkDim);
+    ASSERT_TRUE(slam_state.add_landmark(10, first_position, first_column));
+    const Eigen::MatrixXd second_column = Eigen::MatrixXd::Zero(
+        kRobotDim + 2 * kLandmarkDim, kLandmarkDim);
+    ASSERT_TRUE(slam_state.add_landmark(20, second_position, second_column));
+
+    Eigen::MatrixXd full_covariance =
+        Eigen::MatrixXd::Random(slam_state.active_dim(), slam_state.active_dim());
+    full_covariance = full_covariance * full_covariance.transpose()
+        + Eigen::MatrixXd::Identity(slam_state.active_dim(), slam_state.active_dim());
+    slam_state.active_covariance() = full_covariance;
+
+    const Eigen::MatrixXd old_landmark_covariance = slam_state.landmark_landmark_covariance();
+    const Eigen::MatrixXd old_robot_landmark_covariance = slam_state.robot_landmark_covariance();
+    const StateCovariance old_robot_covariance = slam_state.robot_covariance();
+    const NominalState old_robot = slam_state.robot;
+    const ImuCalibration calibration = make_imu_calibration(0.02, 0.03, 0.004, 0.005);
+    const ImuMeasurement measurement{
+        .timestamp = 1403636579758555392,
+        .acceleration = Eigen::Vector3d{1.0, 2.0, 12.81},
+        .angular_velocity = Eigen::Vector3d{0.1, 0.2, 0.3},
+    };
+    constexpr double timestep = 0.005;
+
+    const auto robot_reference = propagate(
+        old_robot, measurement, calibration, timestep, old_robot_covariance);
+    ASSERT_TRUE(robot_reference) << robot_reference.error();
+
+    const Eigen::Vector3d acceleration = measurement.acceleration - old_robot.accelerometer_bias;
+    const Eigen::Vector3d angular_velocity = measurement.angular_velocity - old_robot.gyroscope_bias;
+    StateCovariance continuous_transition = StateCovariance::Zero();
+    continuous_transition.block<3, 3>(kPositionIndex, kVelocityIndex) = Eigen::Matrix3d::Identity();
+    continuous_transition.block<3, 3>(kVelocityIndex, kOrientationIndex) =
+        -old_robot.orientation.matrix() * skew_symmetric_for_test(acceleration);
+    continuous_transition.block<3, 3>(kVelocityIndex, kAccelerometerBiasIndex) =
+        -old_robot.orientation.matrix();
+    continuous_transition.block<3, 3>(kOrientationIndex, kOrientationIndex) =
+        -skew_symmetric_for_test(angular_velocity);
+    continuous_transition.block<3, 3>(kOrientationIndex, kGyroscopeBiasIndex) =
+        -Eigen::Matrix3d::Identity();
+    const StateCovariance robot_transition =
+        StateCovariance::Identity() + continuous_transition * timestep;
+
+    ASSERT_TRUE(propagate_slam(slam_state, measurement, calibration, timestep));
+    EXPECT_TRUE(slam_state.robot.position.isApprox(robot_reference->nominal_state.position, kTolerance));
+    EXPECT_TRUE(slam_state.robot.velocity.isApprox(robot_reference->nominal_state.velocity, kTolerance));
+    EXPECT_TRUE(slam_state.robot.orientation.matrix().isApprox(
+        robot_reference->nominal_state.orientation.matrix(), kTolerance));
+    EXPECT_TRUE(slam_state.robot_covariance().isApprox(robot_reference->covariance, kTolerance));
+    EXPECT_TRUE(slam_state.robot_landmark_covariance().isApprox(
+        robot_transition * old_robot_landmark_covariance, kTolerance));
+    EXPECT_TRUE((slam_state.landmark_landmark_covariance().array() == old_landmark_covariance.array()).all());
+    EXPECT_TRUE(slam_state.active_covariance().isApprox(slam_state.active_covariance().transpose(), kTolerance));
+
+    const Eigen::SelfAdjointEigenSolver<StateCovariance> robot_eigen_solver(slam_state.robot_covariance());
+    EXPECT_GT(robot_eigen_solver.eigenvalues().minCoeff(), 0.0);
+    const Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eigen_solver(slam_state.active_covariance());
+    EXPECT_GE(eigen_solver.eigenvalues().minCoeff(), -kTolerance);
+}
+
+TEST(PropagationTest, JointPropagationWithNoLandmarksMatchesImuOnlyPath) {
+    const auto initial = SlamState::create(0, make_state(), StateCovariance::Identity());
+    ASSERT_TRUE(initial) << initial.error();
+    SlamState slam_state = std::move(*initial);
+    const ImuCalibration calibration = make_imu_calibration(0.02, 0.03, 0.004, 0.005);
+    const ImuMeasurement measurement{
+        .timestamp = 1403636579758555392,
+        .acceleration = Eigen::Vector3d{1.0, 2.0, 12.81},
+        .angular_velocity = Eigen::Vector3d{0.1, 0.2, 0.3},
+    };
+
+    const auto reference = propagate(
+        slam_state.robot, measurement, calibration, 0.005, slam_state.robot_covariance());
+    ASSERT_TRUE(reference) << reference.error();
+    ASSERT_TRUE(propagate_slam(slam_state, measurement, calibration, 0.005));
+    EXPECT_TRUE(slam_state.robot.position.isApprox(reference->nominal_state.position, 0.0));
+    EXPECT_TRUE(slam_state.robot.velocity.isApprox(reference->nominal_state.velocity, 0.0));
+    EXPECT_TRUE(slam_state.robot.orientation.matrix().isApprox(
+        reference->nominal_state.orientation.matrix(), 0.0));
+    EXPECT_TRUE(slam_state.robot_covariance().isApprox(reference->covariance, 0.0));
+}
 
 TEST(PropagationTest, KeepsStationaryStateWhenSpecificForceBalancesGravity) {
     const auto state = make_state();

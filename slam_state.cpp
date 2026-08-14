@@ -67,6 +67,24 @@ SlamState::ConstActiveBlock SlamState::active_covariance() const {
     return covariance_.topLeftCorner(active_dim(), active_dim());
 }
 
+SlamState::RobotLandmarkBlock SlamState::robot_landmark_covariance() {
+    return covariance_.block<kRobotDim, Eigen::Dynamic>(
+        0, kRobotDim, kRobotDim, active_dim() - kRobotDim);
+}
+
+SlamState::ConstRobotLandmarkBlock SlamState::robot_landmark_covariance() const {
+    return covariance_.block<kRobotDim, Eigen::Dynamic>(
+        0, kRobotDim, kRobotDim, active_dim() - kRobotDim);
+}
+
+SlamState::LandmarkLandmarkBlock SlamState::landmark_landmark_covariance() {
+    return covariance_.block(kRobotDim, kRobotDim, active_dim() - kRobotDim, active_dim() - kRobotDim);
+}
+
+SlamState::ConstLandmarkLandmarkBlock SlamState::landmark_landmark_covariance() const {
+    return covariance_.block(kRobotDim, kRobotDim, active_dim() - kRobotDim, active_dim() - kRobotDim);
+}
+
 ParseResult<void> SlamState::add_landmark(
     LandmarkId id,
     const Eigen::Vector3d& position,

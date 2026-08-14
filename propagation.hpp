@@ -4,6 +4,8 @@
 #include "state.hpp"
 #include "types.hpp"
 
+class SlamState;
+
 struct PropagationResult {
     NominalState nominal_state;
     StateCovariance covariance;
@@ -18,3 +20,11 @@ ParseResult<PropagationResult> propagate(
     const ImuCalibration& imu_calibration,
     double timestep_seconds,
     const StateCovariance& covariance);
+
+// Propagates the robot state and the active joint covariance in place. Landmark
+// covariance is static during prediction; only P_rr and P_rl change.
+ParseResult<void> propagate_slam(
+    SlamState& slam_state,
+    const ImuMeasurement& measurement,
+    const ImuCalibration& imu_calibration,
+    double timestep_seconds);

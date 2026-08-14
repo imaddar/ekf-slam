@@ -4,9 +4,8 @@ Presentation material for this project. Follows the standard deep-dive outline:
 problem, approach, implementation, metrics, results, lessons, contribution.
 
 **Status as of 2026-08-14.** Implemented: EuRoC dataset parser, nominal ESEKF
-state, IMU propagation of state and covariance, storage for a bounded joint SLAM
-state, a synthetic ground-truth harness, and 55 tests. Not implemented: SLAM
-covariance propagation, state augmentation, camera measurement update, ATE/RPE/NEES
+state, joint covariance propagation, a synthetic ground-truth harness, and 58
+tests. Not implemented: state augmentation, camera measurement update, ATE/RPE/NEES
 evaluation, ROS 2, Jetson deployment. Every number below is measured; nothing is
 projected. Keep that boundary explicit when presenting — the strongest thing to
 show right now is *verification methodology on a half-built filter*, not a
@@ -162,8 +161,9 @@ uncertainty, so the SLAM container does not invent either starting value.
 
 The container now owns the bookkeeping needed before covariance math: metric XYZ
 landmark positions, an external-ID registry, capacity-bounded covariance blocks,
-and batch compaction for removal. State augmentation and joint covariance
-propagation remain separate stages.
+and batch compaction for removal. Joint covariance propagation now updates
+`P_rr` and `P_rl` with the shared robot transition while leaving `P_ll`
+unchanged. State augmentation remains a separate stage.
 
 ### The propagation step
 

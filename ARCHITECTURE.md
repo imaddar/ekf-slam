@@ -31,8 +31,8 @@ tests/synthetic_test.cpp Synthetic trajectory and IMU propagation tests
 
 There is a public nominal ESEKF state layout, IMU-only state covariance type,
 preallocated SLAM state storage container with metric XYZ landmark registry and
-batch compaction, and IMU nominal-state and covariance propagation. The full
-error-state struct, SLAM covariance propagation, state augmentation, and
+batch compaction, IMU nominal-state and covariance propagation, and joint SLAM
+covariance propagation. The full error-state struct, state augmentation, and
 measurement update do not exist yet. A synthetic data harness exists for
 controlled pre-EuRoC validation of propagation behavior.
 
@@ -67,7 +67,10 @@ unconditionally filled with NaN at construction so an early read fails visibly
 instead of looking like a valid zero covariance. Landmark positions use a
 preallocated metric XYZ matrix, and an ID registry maps external IDs to dense
 active slots. Batch removal compacts survivors and rebuilds that registry. The
-container does not yet implement covariance propagation or augmentation math.
+active `P_rl` and `P_ll` views are bounded by the active landmark count, and
+`propagate_slam(...)` updates the robot state, `P_rr`, and `P_rl` without
+allocating an augmented transition matrix. `P_ll` remains unchanged during
+prediction; augmentation math does not exist yet.
 
 `propagation.hpp` exposes `PropagationResult` and `propagate(...)`, which
 returns `ParseResult<PropagationResult>`. The propagation function takes a
@@ -79,6 +82,8 @@ gravity, and updates position, velocity, and Sophus SO(3) orientation.
 Covariance is propagated with a first-order discrete transition matrix derived
 from the continuous error-state dynamics, plus first-order process noise
 `Q_d = G Q_raw G^T dt` from the IMU noise densities and bias random walks.
+`propagate_slam(...)` shares this robot transition/process-noise construction,
+then applies it to the active joint covariance block structure.
 
 `synthetic.hpp` exposes `SyntheticTrajectory`, `SyntheticImuConfig`,
 `SyntheticLandmark`, `SyntheticCameraConfig`, `SyntheticStereoObservation`,
@@ -177,6 +182,9 @@ agreement between injected noise and the calibration densities.
   exactly.
 - `SlamState::landmark_block(storage_index)` — public. Returns a bounded,
   compile-time-sized `3x3` covariance block view at a capacity slot.
+- `SlamState::robot_landmark_covariance()` and
+  `SlamState::landmark_landmark_covariance()` — public. Return active-region
+  views of `P_rl` and `P_ll`; inactive landmark capacity is excluded.
 - `SlamState::add_landmark(id, position, covariance_column)` — public. Adds a
   finite metric XYZ landmark and its complete new covariance column to the next
   dense active slot. The column is shaped `(active_dim + 3) x 3` before the
@@ -186,6 +194,8 @@ agreement between injected noise and the calibration densities.
   public. Resolve an external landmark ID to its state offset or stored position.
 - `SlamState::remove_landmarks(ids)` — public. Removes a batch of IDs with one
   dense compaction pass and rebuilds the ID registry.
+- `propagate_slam(slam_state, measurement, imu_calibration, timestep_seconds)` —
+  public. Propagates the nominal robot state and joint covariance in place.
 
 Lower-level YAML, CSV, and stereo-pair parsing functions are private
 implementation details in `parser_yaml.cpp` and `parser_csv.cpp`. Planned future
@@ -576,17 +586,17 @@ behavior yet.
 
 ## Tests
 
-55 GoogleTest cases across five binaries, run through CTest:
+58 GoogleTest cases across five binaries, run through CTest:
 
 - `tests/parser_test.cpp` — inline YAML/CSV fixtures plus a smoke test against
   `datasets/machine_hall/MH_01_easy`.
 - `tests/state_test.cpp` — public state-header declarations.
 - `tests/slam_state_test.cpp` — SLAM state initialization, bounded covariance
-  blocks, NaN-tail poisoning, explicit landmark covariance insertion, metric XYZ
-  registry operations, and batch compaction.
-- `tests/propagation_test.cpp` — nominal integration, covariance transition and
-  process-noise blocks, timestep validation, a Monte Carlo covariance
-  consistency check, and a 1 s EuRoC IMU-only smoke test.
+  blocks, cross-covariance views, NaN-tail poisoning, explicit landmark
+  covariance insertion, metric XYZ registry operations, and batch compaction.
+- `tests/propagation_test.cpp` — nominal and joint integration, covariance
+  transition and process-noise blocks, timestep validation, a Monte Carlo
+  covariance consistency check, and a 1 s EuRoC IMU-only smoke test.
 - `tests/synthetic_test.cpp` — the synthetic harness, and propagation against
   analytic truth up to the headline fully excited case.
 
