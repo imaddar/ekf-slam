@@ -4,69 +4,50 @@
 #include "state.hpp"
 
 #include <cstddef>
-#include <format>
-#include <limits>
-#include <new>
+#include <cstdint>
+#include <span>
+#include <unordered_map>
+#include <vector>
 
 #include <Eigen/Core>
 
 inline constexpr int kRobotDim = kImuErrorStateSize;
 inline constexpr int kLandmarkDim = 3;
+using LandmarkId = std::int64_t;
 
 struct SlamStateTestAccess;
 
 class SlamState {
 public:
+    using RobotBlock = Eigen::Block<Eigen::MatrixXd, kRobotDim, kRobotDim>;
+    using ConstRobotBlock = Eigen::Block<const Eigen::MatrixXd, kRobotDim, kRobotDim>;
+    using ActiveBlock = Eigen::Block<Eigen::MatrixXd, Eigen::Dynamic, Eigen::Dynamic>;
+    using ConstActiveBlock = Eigen::Block<const Eigen::MatrixXd, Eigen::Dynamic, Eigen::Dynamic>;
+    using LandmarkBlock = Eigen::Block<Eigen::MatrixXd, kLandmarkDim, kLandmarkDim>;
+    using ConstLandmarkBlock = Eigen::Block<const Eigen::MatrixXd, kLandmarkDim, kLandmarkDim>;
+
     static ParseResult<SlamState> create(
         std::size_t max_landmarks,
         const NominalState& initial_robot,
-        const ImuStateCovariance& initial_robot_covariance) {
-        constexpr std::size_t kMaxLandmarks =
-            (static_cast<std::size_t>(std::numeric_limits<int>::max()) - kRobotDim) / kLandmarkDim;
-        if (max_landmarks > kMaxLandmarks) {
-            return std::unexpected(std::format(
-                "max_landmarks: expected <= {}, found {}",
-                kMaxLandmarks,
-                max_landmarks));
-        }
+        const ImuStateCovariance& initial_robot_covariance);
 
-        // The bound prevents integer overflow in Eigen dimensions; allocation
-        // can still fail for a large but representable capacity.
-        try {
-            return SlamState{
-                max_landmarks,
-                storage_dim_for(max_landmarks),
-                initial_robot,
-                initial_robot_covariance};
-        } catch (const std::bad_alloc&) {
-            return std::unexpected("max_landmarks: covariance allocation failed");
-        }
-    }
+    std::size_t max_landmarks() const;
+    std::size_t active_landmarks() const;
+    int active_dim() const;
+    int storage_dim() const;
 
-    std::size_t max_landmarks() const { return max_landmarks_; }
-    std::size_t active_landmarks() const { return active_landmarks_; }
+    ParseResult<LandmarkBlock> landmark_block(std::size_t storage_index);
+    ParseResult<ConstLandmarkBlock> landmark_block(std::size_t storage_index) const;
 
-    int active_dim() const {
-        return kRobotDim + static_cast<int>(active_landmarks_) * kLandmarkDim;
-    }
+    RobotBlock robot_covariance();
+    ConstRobotBlock robot_covariance() const;
+    ActiveBlock active_covariance();
+    ConstActiveBlock active_covariance() const;
 
-    int storage_dim() const { return storage_dim_; }
-
-    auto robot_covariance() {
-        return covariance_.topLeftCorner<kRobotDim, kRobotDim>();
-    }
-
-    auto robot_covariance() const {
-        return covariance_.topLeftCorner<kRobotDim, kRobotDim>();
-    }
-
-    auto active_covariance() {
-        return covariance_.topLeftCorner(active_dim(), active_dim());
-    }
-
-    auto active_covariance() const {
-        return covariance_.topLeftCorner(active_dim(), active_dim());
-    }
+    ParseResult<void> add_landmark(LandmarkId id, const Eigen::Vector3d& position);
+    ParseResult<int> landmark_offset(LandmarkId id) const;
+    ParseResult<Eigen::Vector3d> landmark_position(LandmarkId id) const;
+    ParseResult<void> remove_landmarks(std::span<const LandmarkId> ids);
 
     NominalState robot;
 
@@ -77,22 +58,18 @@ private:
         std::size_t max_landmarks,
         int storage_dim,
         const NominalState& initial_robot,
-        const ImuStateCovariance& initial_robot_covariance)
-        : robot{initial_robot},
-          covariance_{storage_dim, storage_dim},
-          storage_dim_{storage_dim},
-          max_landmarks_{max_landmarks} {
-        covariance_.setConstant(std::numeric_limits<double>::quiet_NaN());
-        robot_covariance() = initial_robot_covariance;
-    }
+        const ImuStateCovariance& initial_robot_covariance);
 
-    static int storage_dim_for(std::size_t max_landmarks) {
-        return kRobotDim + static_cast<int>(max_landmarks) * kLandmarkDim;
-    }
+    static int storage_dim_for(std::size_t max_landmarks);
+    static int landmark_offset_for_storage_index(std::size_t storage_index);
 
-    // Only active_covariance() and robot_covariance() may read this storage.
-    // Landmark blocks beyond active_dim() are populated by later augmentation.
+    void initialize_landmark_covariance(std::size_t storage_index);
+    std::vector<bool> make_removal_mask(const std::vector<std::size_t>& removed_indices) const;
+    LandmarkId landmark_id_for_storage_index(std::size_t storage_index) const;
+
     Eigen::MatrixXd covariance_;
+    Eigen::Matrix<double, kLandmarkDim, Eigen::Dynamic> landmark_positions_;
+    std::unordered_map<LandmarkId, std::size_t> landmark_indices_;
     int storage_dim_ = kRobotDim;
     std::size_t max_landmarks_ = 0;
     std::size_t active_landmarks_ = 0;

@@ -180,6 +180,9 @@ Registry behavior:
 - Augmentation attempted at `N_max` follows a documented policy — reject, or
   trigger removal first — rather than asserting or reallocating.
 
+Gate 2 passes with this Step 2 implementation. The next stage is Step 3: joint
+covariance propagation.
+
 ## Step 3: SLAM Covariance Propagation
 
 Extend prediction to the joint covariance.
@@ -358,9 +361,5 @@ Note that the dominant cost in either case is the covariance update
 
 ---
 
-Gate 1 passed at commit `b4aefc4`: covariance storage is private and the initial
-robot covariance is caller-supplied. The next implementation action is Step 1a —
-the debug NaN guard, the `NominalState` initialization gap, and the two
-tautological tests. Step 2 begins with the `landmark_block` accessor so the
-Gate 1 items deferred into Gate 2 are closed before registry bookkeeping lands
-on top of them.
+Gate 1a passed in commits `a807817` and `56f4b03`. Step 2 now implements the
+landmark registry and batch compaction. Step 3 is the next gated stage.

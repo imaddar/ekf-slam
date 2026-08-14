@@ -16,7 +16,7 @@ parser_csv.hpp/cpp  Internal CSV parsing and stereo frame pairing
 parser_yaml.hpp/cpp Internal EuRoC calibration YAML parsing
 propagation.hpp/cpp Public IMU nominal-state propagation
 state.hpp           Public nominal ESEKF state and covariance types
-slam_state.hpp      Public preallocated SLAM state/covariance storage container
+slam_state.hpp/cpp  Public SLAM state, registry, and covariance storage
 synthetic.hpp/cpp   Public synthetic analytic trajectory and IMU generator
 types.hpp           C++ parser output type declarations
 roadmap.md          Planned parser API direction
@@ -30,9 +30,10 @@ tests/synthetic_test.cpp Synthetic trajectory and IMU propagation tests
 ```
 
 There is a public nominal ESEKF state layout, IMU-only state covariance type,
-preallocated SLAM state storage container, and IMU nominal-state and covariance
-propagation. The full error-state struct, landmark registry, state augmentation,
-and measurement update do not exist yet. A synthetic data harness exists for
+preallocated SLAM state storage container with metric XYZ landmark registry and
+batch compaction, and IMU nominal-state and covariance propagation. The full
+error-state struct, SLAM covariance propagation, state augmentation, and
+measurement update do not exist yet. A synthetic data harness exists for
 controlled pre-EuRoC validation of propagation behavior.
 
 ## C++ root skeleton
@@ -53,19 +54,20 @@ container: once landmarks enter the state, the filter should own a joint state
 container with a preallocated maximum-size covariance and a tracked active
 dimension.
 
-`slam_state.hpp` defines `SlamState`, the storage-only joint state container for
-the upcoming landmark work. `SlamState::create(...)` requires the caller to
+`slam_state.hpp/cpp` defines `SlamState`, the bounded joint state container for
+landmark bookkeeping and the upcoming filter math. `SlamState::create(...)` requires the caller to
 provide both the initial `NominalState` and the initial 15x15 robot covariance;
 the current IMU-only propagation API does not define defaults for either. The
 container owns a private preallocated dynamic covariance matrix, a maximum
 landmark budget, and an active landmark count reserved for registry operations.
 The allocated covariance dimension is fixed at construction as
-`15 + max_landmarks * 3`; the active robot view is exposed through accessors.
-Storage beyond the active dimension is unconditionally filled with NaN at
-construction so an early read fails visibly instead of looking like a valid
-zero covariance. It also defines `kRobotDim = 15` and `kLandmarkDim = 3`. It
-does not yet own landmark IDs, landmark positions, compaction, propagation, or
-augmentation math.
+`15 + max_landmarks * 3`; the active robot and capacity-bounded landmark block
+views are exposed through accessors. Storage beyond the active dimension is
+unconditionally filled with NaN at construction so an early read fails visibly
+instead of looking like a valid zero covariance. Landmark positions use a
+preallocated metric XYZ matrix, and an ID registry maps external IDs to dense
+active slots. Batch removal compacts survivors and rebuilds that registry. The
+container does not yet implement covariance propagation or augmentation math.
 
 `propagation.hpp` exposes `PropagationResult` and `propagate(...)`, which
 returns `ParseResult<PropagationResult>`. The propagation function takes a
@@ -126,9 +128,9 @@ with loose sanity bounds.
 `tests/state_test.cpp` verifies that `state.hpp` exposes the nominal-state
 member types and the IMU-only covariance alias boundary.
 `tests/slam_state_test.cpp` verifies explicit robot-state and covariance
-initialization, capacity validation, fixed-size robot covariance access, and
-the NaN guard over inactive covariance storage. Landmark activation and
-landmark-block tests belong to the registry stage.
+initialization, capacity validation, fixed-size covariance access, the NaN guard
+over inactive storage, metric XYZ landmark storage, ID lookup, capacity and
+error handling, allocation stability during insertion, and batch compaction.
 `tests/synthetic_test.cpp` verifies synthetic IMU timestamp spacing, sample-grid
 retention and truncation, ground-truth sampling, a shared time origin across
 streams, bias plumbing from trajectory to stream, invalid-configuration
@@ -173,6 +175,14 @@ agreement between injected noise and the calibration densities.
   public. Fallibly allocates a joint covariance sized for the maximum metric-XYZ
   landmark budget and preserves both caller-provided robot initialization values
   exactly.
+- `SlamState::landmark_block(storage_index)` — public. Returns a bounded,
+  compile-time-sized `3x3` covariance block view at a capacity slot.
+- `SlamState::add_landmark(id, position)` — public. Adds a finite metric XYZ
+  landmark to the next dense active slot.
+- `SlamState::landmark_offset(id)` and `SlamState::landmark_position(id)` —
+  public. Resolve an external landmark ID to its state offset or stored position.
+- `SlamState::remove_landmarks(ids)` — public. Removes a batch of IDs with one
+  dense compaction pass and rebuilds the ID registry.
 
 Lower-level YAML, CSV, and stereo-pair parsing functions are private
 implementation details in `parser_yaml.cpp` and `parser_csv.cpp`. Planned future
@@ -312,10 +322,11 @@ Three commitments drive most of the rest:
   precision loss shows up as a non-positive-definite `P`. Revisit only with a
   profile that says it matters.
 
-### Planned landmark-state decisions
+### Landmark-state decisions
 
-These choices are not implemented yet, but they are settled design direction for
-the next state-augmentation work and replace earlier inverse-depth planning.
+These choices are settled design direction for the landmark filter and replace
+earlier inverse-depth planning. The implemented portions are described above;
+joint covariance propagation and augmentation remain future work.
 
 - **Metric XYZ landmarks from stereo triangulation.** Each landmark will add a
   3-dimensional Euclidean position in the world frame. This directly matches the
@@ -338,11 +349,10 @@ the next state-augmentation work and replace earlier inverse-depth planning.
   `(15 + N_max * 3) x (15 + N_max * 3)` storage. Landmark insertion changes the
   active dimension and writes into already-allocated blocks; it should not
   resize the matrix in the IMU or camera update path. `SlamState` implements the
-  storage and active-dimension foundation of this decision. Covariance storage
-  is private so callers cannot resize it, and the initial robot covariance is
-  supplied explicitly because the current IMU-only propagation path has no
-  default uncertainty. Landmark insertion and removal policy are not
-  implemented yet.
+  storage and active-dimension implementation of this decision. Covariance
+  storage is private so callers cannot resize it, the initial robot state and
+  covariance are supplied explicitly, and landmark insertion uses preallocated
+  storage without changing the allocation.
 - **NaN poison for inactive covariance storage.** The covariance region beyond
   the active robot/landmark block is filled with `NaN` at construction. This is
   intentionally unconditional, including the default `RelWithDebInfo` build:
@@ -352,11 +362,11 @@ the next state-augmentation work and replace earlier inverse-depth planning.
   200 Hz propagation loop. Landmark augmentation must overwrite a block before
   it becomes active.
 - **ID-based landmark registry.** Landmark IDs are external identities, not
-  state indices. All landmark state and covariance access should go through an
+  state indices. All landmark state and covariance access goes through the
   `id -> state offset` registry so data association and removal cannot silently
   corrupt covariance blocks.
-- **Batch compaction for removal.** Landmark removal will compact all survivors
-  in one pass and rebuild the registry. A free-list design would keep offsets
+- **Batch compaction for removal.** Landmark removal compacts all survivors in
+  one pass and rebuilds the registry. A free-list design would keep offsets
   stable, but it pushes holes into every propagation, update, and debugging path.
   Dense active storage keeps `active_dim` meaningful and is the simpler choice
   unless profiling later proves compaction is a bottleneck.
@@ -553,13 +563,13 @@ behavior yet.
 
 ## Tests
 
-48 GoogleTest cases across five binaries, run through CTest:
+54 GoogleTest cases across five binaries, run through CTest:
 
 - `tests/parser_test.cpp` — inline YAML/CSV fixtures plus a smoke test against
   `datasets/machine_hall/MH_01_easy`.
 - `tests/state_test.cpp` — public state-header declarations.
-- `tests/slam_state_test.cpp` — explicit robot-covariance initialization,
-  preallocated SLAM state storage, and protected covariance views.
+- `tests/slam_state_test.cpp` — SLAM state initialization, bounded covariance
+  blocks, metric XYZ registry operations, and batch compaction.
 - `tests/propagation_test.cpp` — nominal integration, covariance transition and
   process-noise blocks, timestep validation, a Monte Carlo covariance
   consistency check, and a 1 s EuRoC IMU-only smoke test.

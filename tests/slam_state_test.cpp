@@ -2,8 +2,10 @@
 
 #include <climits>
 #include <cstddef>
+#include <array>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <Eigen/Core>
 #include <gtest/gtest.h>
@@ -99,4 +101,180 @@ TEST(SlamStateTest, PoisonsInactiveCovarianceRegion) {
     EXPECT_TRUE(covariance.topLeftCorner(kRobotDim, kRobotDim).allFinite());
     EXPECT_TRUE(covariance.block(kRobotDim, 0, inactive_dim, storage_dim).array().isNaN().all());
     EXPECT_TRUE(covariance.block(0, kRobotDim, kRobotDim, inactive_dim).array().isNaN().all());
+}
+
+TEST(SlamStateTest, LandmarkBlockAccessorUsesCapacityAndCompileTimeDimensions) {
+    const auto result = make_state(3);
+
+    ASSERT_TRUE(result) << result.error();
+    SlamState state = std::move(*result);
+    const Eigen::Matrix3d expected =
+        (Eigen::Matrix3d{} << 1.0, 2.0, 3.0,
+            4.0, 5.0, 6.0,
+            7.0, 8.0, 9.0)
+            .finished();
+
+    auto block = state.landmark_block(2);
+    ASSERT_TRUE(block) << block.error();
+    (*block) = expected;
+
+    const auto readback = std::as_const(state).landmark_block(2);
+    ASSERT_TRUE(readback) << readback.error();
+    EXPECT_TRUE((*readback).isApprox(expected, 0.0));
+
+    const auto out_of_capacity = state.landmark_block(3);
+    ASSERT_FALSE(out_of_capacity);
+    EXPECT_NE(out_of_capacity.error().find("landmark_block"), std::string::npos);
+}
+
+TEST(SlamStateTest, AddingLandmarksBuildsFiniteActiveStorageWithoutReallocation) {
+    const auto result = make_state(3);
+
+    ASSERT_TRUE(result) << result.error();
+    SlamState state = std::move(*result);
+    const auto* allocation = state.active_covariance().data();
+    const std::array<Eigen::Vector3d, 2> positions{
+        Eigen::Vector3d{1.0, 2.0, 3.0},
+        Eigen::Vector3d{-4.0, 5.0, -6.0}};
+
+    ASSERT_TRUE(state.add_landmark(10, positions[0]));
+    EXPECT_EQ(state.active_landmarks(), 1U);
+    EXPECT_EQ(state.active_dim(), kRobotDim + kLandmarkDim);
+    EXPECT_EQ(state.active_covariance().data(), allocation);
+    EXPECT_TRUE(state.active_covariance().allFinite());
+
+    ASSERT_TRUE(state.add_landmark(20, positions[1]));
+    EXPECT_EQ(state.active_landmarks(), 2U);
+    EXPECT_EQ(state.active_covariance().data(), allocation);
+    EXPECT_TRUE(state.active_covariance().allFinite());
+}
+
+TEST(SlamStateTest, LandmarkIdsResolveToOffsetsAndPositions) {
+    const auto result = make_state(3);
+
+    ASSERT_TRUE(result) << result.error();
+    SlamState state = std::move(*result);
+    const Eigen::Vector3d position{7.0, -8.0, 9.0};
+
+    ASSERT_TRUE(state.add_landmark(42, position));
+    const auto offset = state.landmark_offset(42);
+    const auto stored_position = state.landmark_position(42);
+
+    ASSERT_TRUE(offset) << offset.error();
+    ASSERT_TRUE(stored_position) << stored_position.error();
+    EXPECT_EQ(*offset, kRobotDim);
+    EXPECT_TRUE(stored_position->isApprox(position, 0.0));
+
+    const auto missing_offset = state.landmark_offset(99);
+    ASSERT_FALSE(missing_offset);
+    EXPECT_NE(missing_offset.error().find("landmark_id"), std::string::npos);
+}
+
+TEST(SlamStateTest, RejectsDuplicateMissingAndOverCapacityLandmarks) {
+    const auto result = make_state(1);
+
+    ASSERT_TRUE(result) << result.error();
+    SlamState state = std::move(*result);
+    const Eigen::Vector3d position{1.0, 2.0, 3.0};
+
+    ASSERT_TRUE(state.add_landmark(1, position));
+    const auto duplicate = state.add_landmark(1, position);
+    ASSERT_FALSE(duplicate);
+    EXPECT_NE(duplicate.error().find("duplicate"), std::string::npos);
+
+    const auto full = state.add_landmark(2, position);
+    ASSERT_FALSE(full);
+    EXPECT_NE(full.error().find("capacity"), std::string::npos);
+
+    const std::array<LandmarkId, 1> missing{99};
+    const auto remove_missing = state.remove_landmarks(missing);
+    ASSERT_FALSE(remove_missing);
+    EXPECT_NE(remove_missing.error().find("unknown"), std::string::npos);
+}
+
+TEST(SlamStateTest, BatchRemovalCompactsSurvivorsAndRebuildsOffsets) {
+    const auto result = make_state(4);
+
+    ASSERT_TRUE(result) << result.error();
+    SlamState state = std::move(*result);
+    const std::array<LandmarkId, 4> ids{10, 20, 30, 40};
+    const std::array<Eigen::Vector3d, 4> positions{
+        Eigen::Vector3d{1.0, 2.0, 3.0},
+        Eigen::Vector3d{4.0, 5.0, 6.0},
+        Eigen::Vector3d{7.0, 8.0, 9.0},
+        Eigen::Vector3d{10.0, 11.0, 12.0}};
+
+    for (std::size_t index = 0; index < ids.size(); ++index) {
+        ASSERT_TRUE(state.add_landmark(ids[index], positions[index]));
+    }
+
+    const int old_active_dim = state.active_dim();
+    Eigen::MatrixXd before = state.active_covariance();
+    for (int row = 0; row < old_active_dim; ++row) {
+        for (int column = 0; column < old_active_dim; ++column) {
+            before(row, column) = static_cast<double>(row * old_active_dim + column + 1);
+        }
+    }
+    state.active_covariance() = before;
+
+    const std::array<LandmarkId, 2> removed{20, 40};
+    ASSERT_TRUE(state.remove_landmarks(removed));
+    EXPECT_EQ(state.active_landmarks(), 2U);
+    EXPECT_EQ(state.active_dim(), kRobotDim + 2 * kLandmarkDim);
+    EXPECT_TRUE(state.active_covariance().allFinite());
+
+    const auto first_offset = state.landmark_offset(10);
+    const auto second_offset = state.landmark_offset(30);
+    ASSERT_TRUE(first_offset) << first_offset.error();
+    ASSERT_TRUE(second_offset) << second_offset.error();
+    EXPECT_EQ(*first_offset, kRobotDim);
+    EXPECT_EQ(*second_offset, kRobotDim + kLandmarkDim);
+
+    const auto first_position = state.landmark_position(10);
+    const auto second_position = state.landmark_position(30);
+    ASSERT_TRUE(first_position) << first_position.error();
+    ASSERT_TRUE(second_position) << second_position.error();
+    EXPECT_TRUE(first_position->isApprox(positions[0], 0.0));
+    EXPECT_TRUE(second_position->isApprox(positions[2], 0.0));
+
+    Eigen::MatrixXd expected = Eigen::MatrixXd::Zero(state.active_dim(), state.active_dim());
+    const std::array<int, 2> survivor_offsets{0, 2};
+    expected.topLeftCorner<kRobotDim, kRobotDim>() = before.topLeftCorner<kRobotDim, kRobotDim>();
+    for (std::size_t new_index = 0; new_index < survivor_offsets.size(); ++new_index) {
+        const int new_offset = kRobotDim + static_cast<int>(new_index) * kLandmarkDim;
+        const int old_offset = kRobotDim + survivor_offsets[new_index] * kLandmarkDim;
+        expected.block<kRobotDim, kLandmarkDim>(0, new_offset) = before.block<kRobotDim, kLandmarkDim>(0, old_offset);
+        expected.block<kLandmarkDim, kRobotDim>(new_offset, 0) = before.block<kLandmarkDim, kRobotDim>(old_offset, 0);
+        expected.block<kLandmarkDim, kLandmarkDim>(new_offset, new_offset) =
+            before.block<kLandmarkDim, kLandmarkDim>(old_offset, old_offset);
+        for (std::size_t previous = 0; previous < new_index; ++previous) {
+            const int previous_new_offset = kRobotDim + static_cast<int>(previous) * kLandmarkDim;
+            const int previous_old_offset = kRobotDim + survivor_offsets[previous] * kLandmarkDim;
+            expected.block<kLandmarkDim, kLandmarkDim>(previous_new_offset, new_offset) =
+                before.block<kLandmarkDim, kLandmarkDim>(previous_old_offset, old_offset);
+            expected.block<kLandmarkDim, kLandmarkDim>(new_offset, previous_new_offset) =
+                before.block<kLandmarkDim, kLandmarkDim>(old_offset, previous_old_offset);
+        }
+    }
+    EXPECT_TRUE(state.active_covariance().isApprox(expected, 0.0));
+}
+
+TEST(SlamStateTest, AddRemoveAddCompactsDeterministically) {
+    const auto result = make_state(2);
+
+    ASSERT_TRUE(result) << result.error();
+    SlamState state = std::move(*result);
+    ASSERT_TRUE(state.add_landmark(1, Eigen::Vector3d{1.0, 0.0, 0.0}));
+    ASSERT_TRUE(state.add_landmark(2, Eigen::Vector3d{2.0, 0.0, 0.0}));
+
+    const std::array<LandmarkId, 1> removed{1};
+    ASSERT_TRUE(state.remove_landmarks(removed));
+    ASSERT_TRUE(state.add_landmark(3, Eigen::Vector3d{3.0, 0.0, 0.0}));
+
+    const auto offset_two = state.landmark_offset(2);
+    const auto offset_three = state.landmark_offset(3);
+    ASSERT_TRUE(offset_two) << offset_two.error();
+    ASSERT_TRUE(offset_three) << offset_three.error();
+    EXPECT_EQ(*offset_two, kRobotDim);
+    EXPECT_EQ(*offset_three, kRobotDim + kLandmarkDim);
 }

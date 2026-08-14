@@ -20,6 +20,7 @@ add_library(ekf_slam_parser
     parser.cpp
     parser_yaml.cpp
     propagation.cpp
+    slam_state.cpp
     synthetic.cpp
 )
 
@@ -96,14 +97,8 @@ if(BUILD_TESTING)
 
     target_link_libraries(slam_state_tests
         PRIVATE
-            Eigen3::Eigen
-            Sophus::Sophus
+            ekf_slam_parser
             GTest::gtest_main
-    )
-
-    target_include_directories(slam_state_tests
-        PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}
     )
 
     target_compile_options(slam_state_tests

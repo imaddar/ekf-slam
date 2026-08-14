@@ -5,8 +5,8 @@ problem, approach, implementation, metrics, results, lessons, contribution.
 
 **Status as of 2026-08-14.** Implemented: EuRoC dataset parser, nominal ESEKF
 state, IMU propagation of state and covariance, storage for a bounded joint SLAM
-state, a synthetic ground-truth harness, and 48 tests. Not implemented: landmark
-registry, state augmentation, camera measurement update, ATE/RPE/NEES
+state, a synthetic ground-truth harness, and 54 tests. Not implemented: SLAM
+covariance propagation, state augmentation, camera measurement update, ATE/RPE/NEES
 evaluation, ROS 2, Jetson deployment. Every number below is measured; nothing is
 projected. Keep that boundary explicit when presenting — the strongest thing to
 show right now is *verification methodology on a half-built filter*, not a
@@ -151,7 +151,7 @@ no ROS dependency yet, no third-party parser.
 parser.cpp / parser_yaml.cpp / parser_csv.cpp   EuRoC loading (hand-written YAML + CSV)
 state.hpp                                       NominalState, IMU-only ImuStateCovariance
 propagation.cpp                                 IMU-only nominal + covariance propagation
-slam_state.hpp                                  bounded joint SLAM covariance storage
+slam_state.hpp/cpp                              bounded joint SLAM state and registry
 synthetic.cpp                                   analytic trajectory, IMU, stereo generator
 ```
 
@@ -159,6 +159,11 @@ The bounded SLAM container receives both the initial nominal robot state and
 the initial robot covariance explicitly. The existing IMU-only propagation path
 also receives `P` from its caller and does not define a universal default
 uncertainty, so the SLAM container does not invent either starting value.
+
+The container now owns the bookkeeping needed before covariance math: metric XYZ
+landmark positions, an external-ID registry, capacity-bounded covariance blocks,
+and batch compaction for removal. State augmentation and joint covariance
+propagation remain separate stages.
 
 ### The propagation step
 
