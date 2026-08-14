@@ -44,6 +44,7 @@ ParseResult<RobotPropagationTerms> build_robot_propagation_terms(
     const ImuMeasurement& measurement,
     const ImuCalibration& imu_calibration,
     double timestep_seconds) {
+    // Out-of-order IMU samples would run the covariance update backwards.
     if (!std::isfinite(timestep_seconds) || timestep_seconds < 0.0) {
         return std::unexpected(std::format(
             "timestep_seconds: expected a finite non-negative timestep, found {}", timestep_seconds));
@@ -51,10 +52,13 @@ ParseResult<RobotPropagationTerms> build_robot_propagation_terms(
 
     const Eigen::Vector3d acceleration = measurement.acceleration - nominal_state.accelerometer_bias;
     const Eigen::Vector3d angular_velocity = measurement.angular_velocity - nominal_state.gyroscope_bias;
+    // IMU acceleration is body-frame specific force; rotate it before adding gravity.
     const Eigen::Vector3d world_acceleration = nominal_state.orientation * acceleration + kGravity;
     const Eigen::Matrix3d rotation = nominal_state.orientation.matrix();
 
+    // Constant-input integration matches the existing IMU-only propagation path.
     NominalState updated_state{
+        // TODO: Benchmark the second-order position term against first-order integration.
         .position = nominal_state.position + nominal_state.velocity * timestep_seconds
             + 0.5 * world_acceleration * timestep_seconds * timestep_seconds,
         .velocity = nominal_state.velocity + world_acceleration * timestep_seconds,
@@ -63,6 +67,7 @@ ParseResult<RobotPropagationTerms> build_robot_propagation_terms(
         .gyroscope_bias = nominal_state.gyroscope_bias,
     };
 
+    // F is continuous-time; each 3x3 block maps one small error component into another.
     StateCovariance continuous_transition = StateCovariance::Zero();
     continuous_transition.block<kBlockSize, kBlockSize>(kPositionIndex, kVelocityIndex) =
         Eigen::Matrix3d::Identity();
@@ -74,6 +79,7 @@ ParseResult<RobotPropagationTerms> build_robot_propagation_terms(
     continuous_transition.block<kBlockSize, kBlockSize>(kOrientationIndex, kGyroscopeBiasIndex) =
         -Eigen::Matrix3d::Identity();
 
+    // First-order discretization; higher-order alternatives remain future work.
     const StateCovariance discrete_transition =
         StateCovariance::Identity() + continuous_transition * timestep_seconds;
 
@@ -100,6 +106,7 @@ ParseResult<RobotPropagationTerms> build_robot_propagation_terms(
         imu_calibration.gyroscope_random_walk * imu_calibration.gyroscope_random_walk
         * Eigen::Matrix3d::Identity();
 
+    // This first-order Qd keeps the current noise model inexpensive.
     const StateCovariance process_noise =
         noise_jacobian * raw_noise * noise_jacobian.transpose() * timestep_seconds;
 
@@ -148,14 +155,20 @@ ParseResult<void> propagate_slam(
         const ImuStateCovariance updated_robot_covariance =
             terms->discrete_transition * slam_state.robot_covariance()
             * terms->discrete_transition.transpose() + terms->process_noise;
-        const Eigen::MatrixXd updated_robot_landmark_covariance =
-            terms->discrete_transition * slam_state.robot_landmark_covariance();
+        auto robot_landmark_covariance = slam_state.robot_landmark_covariance();
+        for (int offset = 0; offset < robot_landmark_covariance.cols(); offset += kLandmarkDim) {
+            const Eigen::Matrix<double, kRobotDim, kLandmarkDim> old_block =
+                robot_landmark_covariance.middleCols<kLandmarkDim>(offset);
+            robot_landmark_covariance.middleCols<kLandmarkDim>(offset) =
+                terms->discrete_transition * old_block;
+        }
 
         slam_state.robot = terms->updated_state;
         slam_state.robot_covariance() = updated_robot_covariance;
-        slam_state.robot_landmark_covariance() = updated_robot_landmark_covariance;
-        slam_state.active_covariance().bottomLeftCorner(
-            slam_state.active_dim() - kRobotDim, kRobotDim) = updated_robot_landmark_covariance.transpose();
+        const auto covariance_result = slam_state.set_robot_landmark_covariance(robot_landmark_covariance);
+        if (!covariance_result) {
+            return std::unexpected(covariance_result.error());
+        }
     } catch (const std::bad_alloc&) {
         return std::unexpected("slam propagation: covariance allocation failed");
     }

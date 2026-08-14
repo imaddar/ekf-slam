@@ -143,6 +143,18 @@ TEST(PropagationTest, PropagatesJointCovarianceByRobotBlocks) {
     EXPECT_TRUE((slam_state.landmark_landmark_covariance().array() == old_landmark_covariance.array()).all());
     EXPECT_TRUE(slam_state.active_covariance().isApprox(slam_state.active_covariance().transpose(), kTolerance));
 
+    Eigen::MatrixXd augmented_transition = Eigen::MatrixXd::Identity(
+        slam_state.active_dim(), slam_state.active_dim());
+    augmented_transition.topLeftCorner<kRobotDim, kRobotDim>() = robot_transition;
+    Eigen::MatrixXd augmented_process_noise = Eigen::MatrixXd::Zero(
+        slam_state.active_dim(), slam_state.active_dim());
+    augmented_process_noise.topLeftCorner<kRobotDim, kRobotDim>() = robot_reference->covariance
+        - robot_transition * old_robot_covariance * robot_transition.transpose();
+    EXPECT_TRUE(slam_state.active_covariance().isApprox(
+        augmented_transition * full_covariance * augmented_transition.transpose()
+            + augmented_process_noise,
+        kTolerance));
+
     const Eigen::SelfAdjointEigenSolver<StateCovariance> robot_eigen_solver(slam_state.robot_covariance());
     EXPECT_GT(robot_eigen_solver.eigenvalues().minCoeff(), 0.0);
     const Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eigen_solver(slam_state.active_covariance());

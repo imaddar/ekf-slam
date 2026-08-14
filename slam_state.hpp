@@ -51,6 +51,8 @@ public:
     ConstRobotLandmarkBlock robot_landmark_covariance() const;
     LandmarkLandmarkBlock landmark_landmark_covariance();
     ConstLandmarkLandmarkBlock landmark_landmark_covariance() const;
+    ParseResult<void> set_robot_landmark_covariance(
+        const Eigen::Ref<const Eigen::MatrixXd>& covariance);
 
     ParseResult<void> add_landmark(
         LandmarkId id,

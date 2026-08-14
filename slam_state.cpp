@@ -85,6 +85,30 @@ SlamState::ConstLandmarkLandmarkBlock SlamState::landmark_landmark_covariance() 
     return covariance_.block(kRobotDim, kRobotDim, active_dim() - kRobotDim, active_dim() - kRobotDim);
 }
 
+ParseResult<void> SlamState::set_robot_landmark_covariance(
+    const Eigen::Ref<const Eigen::MatrixXd>& covariance) {
+    const int landmark_dim = active_dim() - kRobotDim;
+    if (covariance.rows() != kRobotDim || covariance.cols() != landmark_dim) {
+        return std::unexpected(std::format(
+            "robot_landmark_covariance: expected {}x{}, found {}x{}",
+            kRobotDim,
+            landmark_dim,
+            covariance.rows(),
+            covariance.cols()));
+    }
+    if (!covariance.allFinite()) {
+        return std::unexpected("robot_landmark_covariance: expected finite values");
+    }
+
+    for (int offset = 0; offset < landmark_dim; offset += kLandmarkDim) {
+        const Eigen::Matrix<double, kRobotDim, kLandmarkDim> block =
+            covariance.block<kRobotDim, kLandmarkDim>(0, offset);
+        covariance_.block<kRobotDim, kLandmarkDim>(0, kRobotDim + offset) = block;
+        covariance_.block<kLandmarkDim, kRobotDim>(kRobotDim + offset, 0) = block.transpose();
+    }
+    return {};
+}
+
 ParseResult<void> SlamState::add_landmark(
     LandmarkId id,
     const Eigen::Vector3d& position,

@@ -185,6 +185,8 @@ agreement between injected noise and the calibration densities.
 - `SlamState::robot_landmark_covariance()` and
   `SlamState::landmark_landmark_covariance()` — public. Return active-region
   views of `P_rl` and `P_ll`; inactive landmark capacity is excluded.
+- `SlamState::set_robot_landmark_covariance(covariance)` — public. Validates and
+  writes `P_rl` and its symmetric `P_lr` counterpart together.
 - `SlamState::add_landmark(id, position, covariance_column)` — public. Adds a
   finite metric XYZ landmark and its complete new covariance column to the next
   dense active slot. The column is shaped `(active_dim + 3) x 3` before the
