@@ -5,7 +5,7 @@ problem, approach, implementation, metrics, results, lessons, contribution.
 
 **Status as of 2026-08-14.** Implemented: EuRoC dataset parser, nominal ESEKF
 state, IMU propagation of state and covariance, storage for a bounded joint SLAM
-state, a synthetic ground-truth harness, and 49 tests. Not implemented: landmark
+state, a synthetic ground-truth harness, and 47 tests. Not implemented: landmark
 registry, state augmentation, camera measurement update, ATE/RPE/NEES
 evaluation, ROS 2, Jetson deployment. Every number below is measured; nothing is
 projected. Keep that boundary explicit when presenting — the strongest thing to
@@ -155,6 +155,11 @@ slam_state.hpp                                  bounded joint SLAM covariance st
 synthetic.cpp                                   analytic trajectory, IMU, stereo generator
 ```
 
+The bounded SLAM container receives both the initial nominal robot state and
+the initial robot covariance explicitly. The existing IMU-only propagation path
+also receives `P` from its caller and does not define a universal default
+uncertainty, so the SLAM container does not invent either starting value.
+
 ### The propagation step
 
 One IMU sample in, updated state and covariance out:
@@ -274,7 +279,7 @@ meaningful: correct code sits at ~0.04, and corrupting any block of `F` scores
 
 ## 5. Results
 
-All 49 tests pass. Full table and provenance in [BENCHMARKS.md](BENCHMARKS.md).
+All 47 tests pass. Full table and provenance in [BENCHMARKS.md](BENCHMARKS.md).
 
 ### Covariance consistency
 

@@ -81,7 +81,60 @@ Implement the future SLAM state container.
 Active landmark dimensions and landmark-block round trips are deferred to
 Step 2, where registry add operations create valid active landmark entries.
 
-The immediate task is to close any missing Gate 1 evidence before advancing.
+Gate 1 passed at commit `b4aefc4`. The residual items below were identified in
+review and are carried into Step 1a rather than left implicit.
+
+## Step 1a: Uninitialized-Region Guard and Test Hygiene
+
+Close the one Step 1 work item that was specified but not implemented, and
+remove test coverage that asserts less than its name claims.
+
+### Work
+
+- **NaN-fill the region beyond the robot block in debug builds.** The
+  constructor allocates without initializing and writes only `P_rr`, so the
+  landmark region currently holds indeterminate values. This is the intended
+  "undefined beyond active dimension" semantics, but the plan pairs it with an
+  assertion and none exists. Zeros were wrong-but-quiet; indeterminate values
+  are wrong-and-silent until they reach filter math. A debug-only
+  `quiet_NaN` fill turns a premature read into an immediate `allFinite()`
+  failure at the point of the bug rather than several steps downstream. Release
+  builds leave the region untouched so construction cost is unchanged.
+- **Verify the fill without widening the public API.** Declare the test fixture
+  a friend rather than adding a public accessor to storage. A public
+  `storage_covariance()` would reopen exactly the hole Step 1 closed.
+- **Delete `ActivatingStorageDoesNotReallocate`.** It activates nothing —
+  activation does not exist yet — and all three assertions compare pointers to
+  the top-left element of the same column-major buffer, which is
+  unconditionally true. The real before/after pointer check belongs to Step 2's
+  first `add_landmark`.
+- **Delete or rewrite `DoesNotExposeResizableCovarianceMember`.** Its body only
+  checks `storage_dim()`. Non-exposure is a compile-time property; either make
+  it a CMake `try_compile` negative test or drop it and let the private member
+  carry the guarantee.
+- **Require the initial `NominalState` in `create(...)`.** `NominalState robot{}`
+  does not zero its members: Eigen's fixed-size default constructor is
+  user-provided, so value-initialization leaves position, velocity, and both
+  biases indeterminate. This is the same defect the caller-supplied `P_rr`
+  change just fixed for covariance, one field over, and the same argument
+  applies — the container should not invent a starting estimate.
+- Drop the unnecessary `.template` disambiguator on `topLeftCorner` calls;
+  `SlamState` is not a template, so `covariance_` is not type-dependent.
+- Note in a comment that the `max_landmarks` bound guards index arithmetic, not
+  memory. Any capacity near that bound throws `bad_alloc` out of the
+  constructor, which the `ParseResult` contract does not cover.
+
+### Gate 1a
+
+- A debug build fills the region beyond `kRobotDim` with `NaN` at construction,
+  verified for at least one `N_max >= 1`.
+- A release build is unaffected; the fill is behind `NDEBUG`.
+- No public accessor reaches storage beyond the active dimension.
+- `create(...)` requires both initial `P_rr` and initial `NominalState`, and a
+  test asserts both are preserved exactly.
+- Every remaining `slam_state_test.cpp` case fails if the behavior it names is
+  broken. No case passes by tautology.
+- The full suite still builds `-Wall -Wextra -Werror` clean and passes.
 
 ## Step 2: Landmark Registry and Batch Compaction
 
@@ -89,6 +142,13 @@ Add landmark bookkeeping independently of filter mathematics.
 
 ### Work
 
+- **Land the `landmark_block(index)` accessor first, before registry logic.**
+  Bound it against `max_landmarks_` (storage capacity), not the active count,
+  so it is testable on its own. Two Gate 1 items were deferred here, and
+  Architectural Decision "compile-time-sized blocks at runtime offsets" is
+  currently unexercised anywhere in the tree. Proving block mechanics separately
+  keeps the first registry failure from being ambiguous between offset
+  arithmetic and add/remove bookkeeping.
 - Store metric XYZ landmark values in the joint state.
 - Maintain an explicit `landmark_id -> active state offset` registry.
 - Landmark offsets are computed only inside the registry. No caller performs
@@ -100,6 +160,18 @@ Add landmark bookkeeping independently of filter mathematics.
   settable by any other path.
 
 ### Gate 2
+
+Carried over from Gate 1:
+
+- Fixed-size landmark block read/write round-trips correctly at a runtime
+  offset, using compile-time block dimensions.
+- Adding a landmark does not change the covariance allocation or data pointer —
+  captured before and after a real `add_landmark`, not inferred from two views
+  of the same buffer.
+- The active covariance is fully finite after every add, which is what the
+  Step 1a NaN fill exists to detect.
+
+Registry behavior:
 
 - Interior landmark removal preserves all surviving IDs.
 - Landmark state values remain unchanged.
@@ -288,6 +360,9 @@ Note that the dominant cost in either case is the covariance update
 
 ---
 
-The next implementation action is to close Gate 1 by reviewing the explicit
-initialization and private-storage changes. The landmark registry must wait
-until that gate passes.
+Gate 1 passed at commit `b4aefc4`: covariance storage is private and the initial
+robot covariance is caller-supplied. The next implementation action is Step 1a —
+the debug NaN guard, the `NominalState` initialization gap, and the two
+tautological tests. Step 2 begins with the `landmark_block` accessor so the
+Gate 1 items deferred into Gate 2 are closed before registry bookkeeping lands
+on top of them.
