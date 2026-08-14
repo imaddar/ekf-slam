@@ -58,27 +58,28 @@ Implement the future SLAM state container.
   `conservativeResize` or any other reallocating operation.
 - Active landmark count is read-only from outside; it changes only as a
   consequence of registry add/remove operations introduced in Step 2.
-- **Initial `P_rr` must reproduce the existing propagation path's starting
-  uncertainty.** Zero-initialization is not correct: a zero covariance block
-  asserts infinite confidence. Identify what the IMU-only path currently uses
-  for initial pose, velocity, and bias uncertainty, and where that
-  initialization lives in the new container.
+- **Initial `P_rr` is supplied by the caller.** The current IMU-only path does
+  not own a default initial covariance; `propagate(...)` receives `P` from its
+  caller. The new container must preserve that contract rather than inventing
+  an uncertainty value. Zero-initialization is therefore not a valid default.
 - The covariance region beyond the active dimension is undefined. It is written
   by augmentation and must never be read before that. Assert this rather than
   relying on zero-fill.
 
 ### Gate 1
 
-- `N = 0` matches the old 15x15 path exactly, **including the initial
-  covariance values** — not merely the dimensions.
-- The source of initial `P_rr` is documented, and a test asserts it against the
-  IMU-only baseline.
+- `N = 0` matches the old 15x15 path exactly for caller-supplied initial `P_rr`
+  values, not merely for dimensions.
+- The source of initial `P_rr` is documented, and a test asserts that the
+  caller-supplied covariance is preserved exactly.
 - Covariance dimensions are correct for multiple `N_max` values.
-- Activating landmarks does not change the covariance allocation or data
-  pointer.
-- Active top-left views have correct dimensions.
-- Fixed-size landmark block read/write round-trips correctly.
+- The active robot view has the expected dimensions and its data pointer is
+  stable after construction.
+- Fixed-size robot-block read/write round-trips through an accessor.
 - No public API permits reallocation of the covariance storage.
+
+Active landmark dimensions and landmark-block round trips are deferred to
+Step 2, where registry add operations create valid active landmark entries.
 
 The immediate task is to close any missing Gate 1 evidence before advancing.
 
@@ -287,6 +288,6 @@ Note that the dominant cost in either case is the covariance update
 
 ---
 
-The next implementation action is to close Gate 1. In particular, initial
-`P_rr` values and private covariance storage are the two outstanding items. The
-landmark registry must wait until that gate passes.
+The next implementation action is to close Gate 1 by reviewing the explicit
+initialization and private-storage changes. The landmark registry must wait
+until that gate passes.

@@ -42,8 +42,8 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-42 tests across `parser_tests`, `state_tests`, `propagation_tests`, and
-`synthetic_tests`. No CI config and no standalone benchmark binary yet — metrics
+49 tests across `parser_tests`, `state_tests`, `slam_state_tests`,
+`propagation_tests`, and `synthetic_tests`. No CI config and no standalone benchmark binary yet — metrics
 are asserted inside the test suite and recorded in `BENCHMARKS.md`.
 `parse_dataset(...)` loads a EuRoC sequence into the current `Dataset` shape.
 
@@ -104,5 +104,3 @@ are asserted inside the test suite and recorded in `BENCHMARKS.md`.
 * Describe lessons learned from the project and potential future directions for additional research.
 
 * If the this was a group project, what was your specific contribution to the work?
-
- 

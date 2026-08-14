@@ -5,7 +5,7 @@ problem, approach, implementation, metrics, results, lessons, contribution.
 
 **Status as of 2026-08-14.** Implemented: EuRoC dataset parser, nominal ESEKF
 state, IMU propagation of state and covariance, storage for a bounded joint SLAM
-state, a synthetic ground-truth harness, and 48 tests. Not implemented: landmark
+state, a synthetic ground-truth harness, and 49 tests. Not implemented: landmark
 registry, state augmentation, camera measurement update, ATE/RPE/NEES
 evaluation, ROS 2, Jetson deployment. Every number below is measured; nothing is
 projected. Keep that boundary explicit when presenting — the strongest thing to
@@ -274,7 +274,7 @@ meaningful: correct code sits at ~0.04, and corrupting any block of `F` scores
 
 ## 5. Results
 
-All 42 tests pass. Full table and provenance in [BENCHMARKS.md](BENCHMARKS.md).
+All 49 tests pass. Full table and provenance in [BENCHMARKS.md](BENCHMARKS.md).
 
 ### Covariance consistency
 

@@ -96,8 +96,14 @@ if(BUILD_TESTING)
 
     target_link_libraries(slam_state_tests
         PRIVATE
-            ekf_slam_parser
+            Eigen3::Eigen
+            Sophus::Sophus
             GTest::gtest_main
+    )
+
+    target_include_directories(slam_state_tests
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}
     )
 
     target_compile_options(slam_state_tests

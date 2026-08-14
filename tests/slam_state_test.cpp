@@ -1,75 +1,84 @@
 #include "slam_state.hpp"
 
+#include <climits>
 #include <cstddef>
+#include <string>
+#include <utility>
 
 #include <Eigen/Core>
 #include <gtest/gtest.h>
 
-TEST(SlamStateTest, AllocatesRobotOnlyCovarianceWhenLandmarkBudgetIsZero) {
-    SlamState state{0};
+namespace {
 
-    EXPECT_EQ(state.max_landmarks(), 0U);
-    EXPECT_EQ(state.active_landmarks(), 0U);
-    EXPECT_EQ(state.active_dim(), kRobotDim);
-    EXPECT_EQ(state.covariance.rows(), kRobotDim);
-    EXPECT_EQ(state.covariance.cols(), kRobotDim);
-    EXPECT_EQ(state.active_covariance().rows(), kRobotDim);
-    EXPECT_EQ(state.active_covariance().cols(), kRobotDim);
+ImuStateCovariance make_initial_covariance() {
+    ImuStateCovariance covariance = ImuStateCovariance::Zero();
+    covariance.diagonal() = Eigen::Vector<double, kRobotDim>::LinSpaced(kRobotDim, 1.0, 15.0);
+    return covariance;
+}
+
+}
+
+TEST(SlamStateTest, RequiresExplicitRobotCovarianceInitialization) {
+    const ImuStateCovariance expected = make_initial_covariance();
+    const auto result = SlamState::create(0, expected);
+
+    ASSERT_TRUE(result) << result.error();
+    EXPECT_TRUE(result->robot_covariance().isApprox(expected, 0.0));
+    EXPECT_TRUE(result->active_covariance().isApprox(expected, 0.0));
 }
 
 TEST(SlamStateTest, PreallocatesFullCovarianceForLandmarkBudget) {
     constexpr std::size_t kMaxLandmarks = 4;
-    SlamState state{kMaxLandmarks};
+    const auto result = SlamState::create(kMaxLandmarks, make_initial_covariance());
 
-    constexpr int kExpectedDim = kRobotDim + static_cast<int>(kMaxLandmarks) * kLandmarkDim;
-    EXPECT_EQ(state.max_landmarks(), kMaxLandmarks);
-    EXPECT_EQ(state.covariance.rows(), kExpectedDim);
-    EXPECT_EQ(state.covariance.cols(), kExpectedDim);
-    EXPECT_EQ(state.active_dim(), kRobotDim);
-    EXPECT_EQ(state.active_covariance().rows(), kRobotDim);
-    EXPECT_EQ(state.active_covariance().cols(), kRobotDim);
+    ASSERT_TRUE(result) << result.error();
+    EXPECT_EQ(result->max_landmarks(), kMaxLandmarks);
+    EXPECT_EQ(result->storage_dim(), kRobotDim + 4 * kLandmarkDim);
+    EXPECT_EQ(result->active_landmarks(), 0U);
+    EXPECT_EQ(result->active_dim(), kRobotDim);
+    EXPECT_EQ(result->active_covariance().rows(), kRobotDim);
+    EXPECT_EQ(result->active_covariance().cols(), kRobotDim);
 }
 
-TEST(SlamStateTest, TracksActiveDimensionSeparatelyFromAllocatedCapacity) {
-    SlamState state{5};
+TEST(SlamStateTest, ActivatingStorageDoesNotReallocate) {
+    const auto result = SlamState::create(5, make_initial_covariance());
 
-    const auto activated = state.set_active_landmarks(3);
+    ASSERT_TRUE(result) << result.error();
+    SlamState state = std::move(*result);
+    const auto* allocation = state.robot_covariance().data();
+    const auto* active_view_data = state.active_covariance().data();
 
-    ASSERT_TRUE(activated) << activated.error();
-    EXPECT_EQ(state.active_landmarks(), 3U);
-    EXPECT_EQ(state.active_dim(), kRobotDim + 3 * kLandmarkDim);
-    EXPECT_EQ(state.covariance.rows(), kRobotDim + 5 * kLandmarkDim);
-    EXPECT_EQ(state.active_covariance().rows(), state.active_dim());
-    EXPECT_EQ(state.active_covariance().cols(), state.active_dim());
+    EXPECT_EQ(allocation, active_view_data);
+    EXPECT_EQ(state.robot_covariance().data(), allocation);
+    EXPECT_EQ(state.active_covariance().data(), allocation);
 }
 
-TEST(SlamStateTest, RejectsActiveLandmarkCountBeyondCapacity) {
-    SlamState state{2};
+TEST(SlamStateTest, RejectsLandmarkCapacityThatCannotFitInEigenDimension) {
+    const auto result = SlamState::create(static_cast<std::size_t>(INT_MAX), make_initial_covariance());
 
-    const auto activated = state.set_active_landmarks(3);
-
-    ASSERT_FALSE(activated);
-    EXPECT_NE(activated.error().find("active_landmarks"), std::string::npos) << activated.error();
-    EXPECT_EQ(state.active_landmarks(), 0U);
-    EXPECT_EQ(state.active_dim(), kRobotDim);
+    ASSERT_FALSE(result);
+    EXPECT_NE(result.error().find("max_landmarks"), std::string::npos) << result.error();
 }
 
-TEST(SlamStateTest, FixedSizeLandmarkBlocksRoundTripAtNonzeroOffset) {
-    SlamState state{3};
-    const auto activated = state.set_active_landmarks(3);
-    ASSERT_TRUE(activated) << activated.error();
+TEST(SlamStateTest, RobotCovarianceBlockRoundTripsThroughAccessor) {
+    const auto result = SlamState::create(3, make_initial_covariance());
 
-    const int second_landmark_offset = state.landmark_offset(1);
-    const Eigen::Matrix3d expected =
-        (Eigen::Matrix3d{} << 1.0, 2.0, 3.0,
-            4.0, 5.0, 6.0,
-            7.0, 8.0, 9.0)
-            .finished();
+    ASSERT_TRUE(result) << result.error();
+    SlamState state = std::move(*result);
+    const Eigen::Matrix<double, kRobotDim, kRobotDim> expected =
+        Eigen::Matrix<double, kRobotDim, kRobotDim>::Identity();
 
-    state.covariance.block<kLandmarkDim, kLandmarkDim>(second_landmark_offset, second_landmark_offset) = expected;
+    state.robot_covariance() = expected;
 
-    EXPECT_TRUE((state.covariance.block<kLandmarkDim, kLandmarkDim>(
-                                second_landmark_offset,
-                                second_landmark_offset)
-                     .isApprox(expected)));
+    EXPECT_TRUE(state.robot_covariance().isApprox(expected, 0.0));
+    EXPECT_TRUE(state.active_covariance().isApprox(expected, 0.0));
+}
+
+TEST(SlamStateTest, DoesNotExposeResizableCovarianceMember) {
+    const auto result = SlamState::create(1, make_initial_covariance());
+
+    ASSERT_TRUE(result) << result.error();
+    SlamState state = std::move(*result);
+
+    EXPECT_EQ(state.storage_dim(), kRobotDim + kLandmarkDim);
 }
