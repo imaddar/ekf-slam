@@ -5,7 +5,7 @@ problem, approach, implementation, metrics, results, lessons, contribution.
 
 **Status as of 2026-08-14.** Implemented: EuRoC dataset parser, nominal ESEKF
 state, joint covariance propagation, metric XYZ stereo geometry, a synthetic
-ground-truth harness, and 63 tests. Not implemented: state augmentation, camera
+ground-truth harness, and 65 tests. Not implemented: state augmentation, camera
 measurement update, ATE/RPE/NEES
 evaluation, ROS 2, Jetson deployment. Every number below is measured; nothing is
 projected. Keep that boundary explicit when presenting — the strongest thing to
@@ -216,6 +216,15 @@ From it, the harness generates:
   interpolation error is introduced when camera and IMU timestamps disagree.
 - **Stereo observations** by projecting known world landmarks into two pinhole
   cameras.
+
+The camera measurement model is intentionally narrower than the future update
+step. It takes only `R_WB`, `p_WB`, one world landmark, and one camera
+calibration, then applies the chain world -> body -> camera -> normalized plane
+-> pixel. It does not know about velocity, biases, covariance, landmark
+iteration, measurement noise, or Kalman gain. That separation makes a useful
+deep-dive slide: the math that predicts a pixel is pure geometry, while the EKF
+update is the separate step that compares measured pixels against that
+prediction and decides how to move the state.
 
 Three details that turned out to matter more than expected:
 

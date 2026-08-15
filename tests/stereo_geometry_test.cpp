@@ -1,6 +1,7 @@
 #include "stereo_geometry.hpp"
 
-#include <cmath>
+#include <limits>
+#include <string>
 
 #include <gtest/gtest.h>
 
@@ -52,34 +53,36 @@ TEST(StereoGeometryTest, IdentityTransformMapsCameraPointDirectlyToWorld) {
     EXPECT_TRUE(result->isApprox(point_camera, 0.0));
 }
 
-TEST(StereoGeometryTest, WorldCameraWorldRoundTripMatchesToMachinePrecision) {
+TEST(StereoGeometryTest, WorldToCameraToWorldRoundTripMatchesToMachinePrecision) {
     const NominalState robot = make_robot();
     const CameraCalibration camera = make_camera(
         make_transform(Eigen::Vector3d{-0.1, 0.25, 0.15}, Eigen::Vector3d{0.3, -0.2, 0.4}));
-    const Eigen::Vector3d point_camera{2.0, -1.0, 6.0};
+    const Eigen::Vector3d point_world{4.0, -1.0, 8.0};
 
-    const auto world = camera_point_to_world(robot, camera, point_camera);
-    ASSERT_TRUE(world) << world.error();
-    const auto camera_again = world_point_to_camera(robot, camera, *world);
+    const auto camera_point = world_point_to_camera(robot, camera, point_world);
+    ASSERT_TRUE(camera_point) << camera_point.error();
+    const auto world_again = camera_point_to_world(robot, camera, *camera_point);
 
-    ASSERT_TRUE(camera_again) << camera_again.error();
-    EXPECT_TRUE(camera_again->isApprox(point_camera, 1e-15));
+    ASSERT_TRUE(world_again) << world_again.error();
+    EXPECT_TRUE(world_again->isApprox(point_world, 1e-15));
 }
 
 TEST(StereoGeometryTest, NonzeroPoseAndExtrinsicsMatchHandComputedForwardMap) {
-    const NominalState robot = make_robot();
-    const Eigen::Matrix4d t_bs = make_transform(
-        Eigen::Vector3d{0.1, -0.2, 0.3}, Eigen::Vector3d{0.4, 0.5, -0.6});
+    NominalState robot{
+        .position = Eigen::Vector3d{1.0, 2.0, 3.0},
+        .velocity = Eigen::Vector3d::Zero(),
+        .orientation = Sophus::SO3d::exp(Eigen::Vector3d{0.0, 0.0, 1.5707963267948966}),
+        .accelerometer_bias = Eigen::Vector3d::Zero(),
+        .gyroscope_bias = Eigen::Vector3d::Zero(),
+    };
+    const Eigen::Matrix4d t_bs = make_transform(Eigen::Vector3d::Zero(), Eigen::Vector3d{0.1, 0.0, 0.0});
     const CameraCalibration camera = make_camera(t_bs);
-    const Eigen::Vector3d point_camera{1.5, -0.5, 4.0};
-    const Eigen::Vector3d expected = robot.orientation.matrix()
-        * (t_bs.topLeftCorner<3, 3>() * point_camera + t_bs.topRightCorner<3, 1>())
-        + robot.position;
+    const Eigen::Vector3d point_camera{1.0, 0.0, 5.0};
 
     const auto result = camera_point_to_world(robot, camera, point_camera);
 
     ASSERT_TRUE(result) << result.error();
-    EXPECT_TRUE(result->isApprox(expected, 1e-15));
+    EXPECT_TRUE(result->isApprox(Eigen::Vector3d{1.0, 3.1, 8.0}, 1e-15));
 }
 
 TEST(StereoGeometryTest, RejectsNonRigidCameraExtrinsics) {
@@ -89,4 +92,22 @@ TEST(StereoGeometryTest, RejectsNonRigidCameraExtrinsics) {
 
     ASSERT_FALSE(result);
     EXPECT_NE(result.error().find("t_bs"), std::string::npos);
+}
+
+TEST(StereoGeometryTest, RejectsReflectionExtrinsics) {
+    Eigen::Matrix4d reflection = Eigen::Matrix4d::Identity();
+    reflection(0, 0) = -1.0;
+    const auto result = world_point_to_camera(make_robot(), make_camera(reflection), Eigen::Vector3d{1.0, 2.0, 3.0});
+
+    ASSERT_FALSE(result);
+    EXPECT_NE(result.error().find("proper rotation"), std::string::npos);
+}
+
+TEST(StereoGeometryTest, RejectsNonFiniteWorldPoint) {
+    const Eigen::Vector3d invalid{
+        std::numeric_limits<double>::quiet_NaN(), 2.0, 3.0};
+    const auto result = world_point_to_camera(make_robot(), make_camera(Eigen::Matrix4d::Identity()), invalid);
+
+    ASSERT_FALSE(result);
+    EXPECT_NE(result.error().find("point_world"), std::string::npos);
 }

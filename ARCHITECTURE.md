@@ -14,6 +14,7 @@ parser.hpp          Public C++ parser API declaration
 parser.cpp          Top-level dataset loading orchestration
 parser_csv.hpp/cpp  Internal CSV parsing and stereo frame pairing
 parser_yaml.hpp/cpp Internal EuRoC calibration YAML parsing
+measurement_model.hpp/cpp Pure pinhole pixel prediction h(.) for one landmark
 propagation.hpp/cpp Public IMU nominal-state propagation
 state.hpp           Public nominal ESEKF state and covariance types
 slam_state.hpp/cpp  Public SLAM state, registry, and covariance storage
@@ -24,18 +25,22 @@ roadmap.md          Planned parser API direction
 docs/parser.md      Parser implementation notes and future direction
 present.md          Technical deep-dive presentation material
 tests/parser_test.cpp  C++ parser tests
+tests/measurement_model_test.cpp Pure camera measurement-model tests
 tests/propagation_test.cpp  C++ propagation tests
 tests/state_test.cpp   C++ state-header compile tests
 tests/slam_state_test.cpp  SLAM state storage tests
+tests/stereo_geometry_test.cpp Metric XYZ frame-transform tests
 tests/synthetic_test.cpp Synthetic trajectory and IMU propagation tests
 ```
 
 There is a public nominal ESEKF state layout, IMU-only state covariance type,
 preallocated SLAM state storage container with metric XYZ landmark registry and
 batch compaction, IMU nominal-state and covariance propagation, joint SLAM
-covariance propagation, and metric XYZ stereo geometry. The full error-state
-struct, state augmentation, and measurement update do not exist yet. A synthetic data harness exists for
-controlled pre-EuRoC validation of propagation behavior.
+covariance propagation, metric XYZ stereo geometry, and a pure pinhole camera
+measurement model for predicting where one world landmark should project. The
+full error-state struct, state augmentation, and measurement update do not exist
+yet. A synthetic data harness exists for controlled pre-EuRoC validation of
+propagation behavior.
 
 ## C++ root skeleton
 
@@ -77,6 +82,15 @@ prediction; augmentation math does not exist yet.
 initialization. `CameraCalibration::t_bs` is body-from-camera (`T_BS`), so a
 camera point maps through `R_BS` and `p_BS`, then through the robot's
 world-from-body pose. Both directions validate the calibration extrinsic.
+
+`measurement_model.hpp/cpp` defines `predict_pinhole_pixel(...)`, the pure
+camera measurement model `h(.)`. It takes only a world-from-body rotation
+`R_WB`, world-from-body position `p_WB`, one world landmark `l_W`, and one
+camera calibration. It predicts body coordinates, camera coordinates,
+normalized pinhole coordinates, and pixel coordinates. It does not take
+`NominalState`, velocity, biases, covariance, process-noise terms, or landmark
+storage; landmark iteration and state slicing belong to the future update step.
+Visibility gating (`Z <= 0`) and image-bound checks are also outside this API.
 
 `propagation.hpp` exposes `PropagationResult` and `propagate(...)`, which
 returns `ParseResult<PropagationResult>`. The propagation function takes a
@@ -210,6 +224,12 @@ agreement between injected noise and the calibration densities.
 - `camera_point_to_world(robot, camera, point_camera)` and
   `world_point_to_camera(robot, camera, point_world)` — public. Apply the
   validated metric XYZ frame transforms using `CameraCalibration::t_bs`.
+- `body_from_camera_transform(camera)` and `camera_from_body_transform(camera)` —
+  public. Validate and return the rigid `T_BS` transform or its precomputed
+  inverse for callers such as the synthetic projection harness.
+- `predict_pinhole_pixel(R_WB, p_WB, landmark_world, camera)` — public. Applies
+  the pure pinhole measurement model for one landmark and one camera without
+  visibility gating, noise, covariance access, or update-step state slicing.
 
 Lower-level YAML, CSV, and stereo-pair parsing functions are private
 implementation details in `parser_yaml.cpp` and `parser_csv.cpp`. Planned future
@@ -442,6 +462,25 @@ augmentation remains future work.
   its own vocabulary and add a dependency to cross-compile. This choice is only
   defensible while the input stays EuRoC-shaped.
 
+### Camera measurement model
+
+- **`h(.)` is a pose-and-one-landmark function, not a filter function.**
+  `predict_pinhole_pixel(...)` takes `R_WB`, `p_WB`, one `l_W`, and one camera
+  calibration directly. It deliberately does not accept `NominalState`,
+  `SlamState`, covariance, velocity, or biases. This keeps projection geometry
+  independent from propagation and leaves landmark iteration, state-vector
+  slicing, residual stacking, and Kalman algebra to the future update step.
+- **Visibility gating is outside `h(.)`.** Points with `Z <= 0` or projected
+  pixels outside the image are frontend/association decisions, not measurement
+  geometry. Keeping those checks out makes the model a predictable map from a
+  supplied state hypothesis to a pixel prediction. The cost is that callers must
+  only use valid correspondences when forming an EKF innovation.
+- **Distortion is excluded from the state measurement model.** Measurements are
+  expected to be undistorted before innovation computation. The EuRoC distortion
+  coefficients are fixed calibration constants, so carrying them through
+  `d h / d x` would add complexity without adding estimated state information.
+  The current implementation therefore models pinhole projection only.
+
 ### Synthetic data harness
 
 - **In-memory structs, not generated EuRoC folders.** Filter tests stay focused
@@ -604,7 +643,7 @@ behavior yet.
 
 ## Tests
 
-63 GoogleTest cases across six binaries, run through CTest:
+65 GoogleTest cases across six binaries, run through CTest:
 
 - `tests/parser_test.cpp` — inline YAML/CSV fixtures plus a smoke test against
   `datasets/machine_hall/MH_01_easy`.

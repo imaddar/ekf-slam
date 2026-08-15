@@ -1,5 +1,7 @@
 #include "synthetic.hpp"
 
+#include "stereo_geometry.hpp"
+
 #include <cmath>
 #include <cstdint>
 #include <format>
@@ -75,14 +77,12 @@ struct PinholeCamera {
     Eigen::Vector2i resolution;
 };
 
-PinholeCamera make_pinhole_camera(const CameraCalibration& calibration) {
-    const Eigen::Matrix3d rotation_body_from_camera = calibration.t_bs.block<3, 3>(0, 0);
-    const Eigen::Vector3d translation_body_from_camera = calibration.t_bs.block<3, 1>(0, 3);
-    // Rigid inverse; validate_rigid_transform guarantees it matches t_bs.inverse().
+PinholeCamera make_pinhole_camera(
+    const CameraCalibration& calibration,
+    const Eigen::Matrix4d& camera_from_body) {
     return {
-        .rotation_camera_from_body = rotation_body_from_camera.transpose(),
-        .translation_camera_from_body =
-            -rotation_body_from_camera.transpose() * translation_body_from_camera,
+        .rotation_camera_from_body = camera_from_body.block<3, 3>(0, 0),
+        .translation_camera_from_body = camera_from_body.block<3, 1>(0, 3),
         .intrinsics = calibration.intrinsics,
         .resolution = calibration.resolution,
     };
@@ -105,28 +105,6 @@ ParseResult<void> validate_stddev(double value, std::string_view field_name) {
     if (!std::isfinite(value) || value < 0.0) {
         return std::unexpected(
             std::format("{}: expected a finite non-negative value, found {}", field_name, value));
-    }
-
-    return {};
-}
-
-ParseResult<void> validate_rigid_transform(const Eigen::Matrix4d& t_bs, std::string_view camera_name) {
-    const Eigen::Matrix3d rotation = t_bs.block<3, 3>(0, 0);
-    if (!(rotation.transpose() * rotation).isApprox(Eigen::Matrix3d::Identity(), kRigidTransformTolerance)
-        || std::abs(rotation.determinant() - 1.0) > kRigidTransformTolerance) {
-        return std::unexpected(std::format(
-            "{}.t_bs: expected a rotation block in SO(3), found a non-orthonormal block", camera_name));
-    }
-
-    const Eigen::Vector4d bottom_row = t_bs.row(3);
-    if ((bottom_row - Eigen::Vector4d{0.0, 0.0, 0.0, 1.0}).norm() > kRigidTransformTolerance) {
-        return std::unexpected(std::format(
-            "{}.t_bs: expected bottom row [0, 0, 0, 1], found [{}, {}, {}, {}]",
-            camera_name,
-            bottom_row.x(),
-            bottom_row.y(),
-            bottom_row.z(),
-            bottom_row.w()));
     }
 
     return {};
@@ -162,8 +140,8 @@ ParseResult<void> validate_rectified_stereo(
 }
 
 ParseResult<void> validate_camera(const CameraCalibration& calibration, std::string_view camera_name) {
-    if (auto rigid = validate_rigid_transform(calibration.t_bs, camera_name); !rigid) {
-        return rigid;
+    if (auto rigid = body_from_camera_transform(calibration); !rigid) {
+        return std::unexpected(std::format("{}: {}", camera_name, rigid.error()));
     }
 
     if (calibration.resolution.x() <= 0 || calibration.resolution.y() <= 0) {
@@ -404,8 +382,13 @@ ParseResult<std::vector<SyntheticStereoObservation>> synthesize_stereo_observati
         return std::unexpected(valid.error());
     }
 
-    const PinholeCamera cam0 = make_pinhole_camera(cam0_calibration);
-    const PinholeCamera cam1 = make_pinhole_camera(cam1_calibration);
+    const auto cam0_from_body = camera_from_body_transform(cam0_calibration);
+    const auto cam1_from_body = camera_from_body_transform(cam1_calibration);
+    if (!cam0_from_body || !cam1_from_body) {
+        return std::unexpected("camera extrinsics: validation changed after camera validation");
+    }
+    const PinholeCamera cam0 = make_pinhole_camera(cam0_calibration, *cam0_from_body);
+    const PinholeCamera cam1 = make_pinhole_camera(cam1_calibration, *cam1_from_body);
 
     const std::int64_t frames = sample_count(config.rate_hz, config.duration_seconds);
     std::vector<SyntheticStereoObservation> observations;
