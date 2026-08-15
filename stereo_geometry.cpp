@@ -1,37 +1,57 @@
 #include "stereo_geometry.hpp"
 
-#include <cmath>
 #include <format>
+#include <string_view>
 
 namespace {
 
-ParseResult<Eigen::Matrix4d> validate_camera_extrinsics(const CameraCalibration& camera) {
+constexpr double kRigidTransformTolerance = 1e-9;
+
+ParseResult<Eigen::Matrix4d> validate_camera_extrinsics(
+    const CameraCalibration& camera,
+    std::string_view field_name) {
     if (!camera.t_bs.allFinite()) {
-        return std::unexpected("camera.t_bs: expected finite values");
+        return std::unexpected(std::format("{}.t_bs: expected finite values", field_name));
     }
 
     const Eigen::Matrix3d rotation = camera.t_bs.block<3, 3>(0, 0);
-    if (!(rotation.transpose() * rotation).isApprox(Eigen::Matrix3d::Identity(), 1e-9)) {
-        return std::unexpected("camera.t_bs: expected an orthonormal rotation block");
+    const Eigen::Matrix3d gram = rotation.transpose() * rotation;
+    if (!gram.isApprox(Eigen::Matrix3d::Identity(), kRigidTransformTolerance)) {
+        return std::unexpected(std::format(
+            "{}.t_bs: expected an orthonormal rotation block, found R^T R off identity by {}",
+            field_name,
+            (gram - Eigen::Matrix3d::Identity()).norm()));
     }
     const double determinant = rotation.determinant();
     if (determinant <= 0.0) {
-        return std::unexpected("camera.t_bs: expected a proper rotation");
+        return std::unexpected(std::format(
+            "{}.t_bs: expected a proper rotation, found determinant {}", field_name, determinant));
     }
-    if (!camera.t_bs.row(3).isApprox(Eigen::Vector4d{0.0, 0.0, 0.0, 1.0}.transpose(), 1e-9)) {
-        return std::unexpected("camera.t_bs: expected a homogeneous rigid transform");
+    const Eigen::Vector4d bottom_row = camera.t_bs.row(3);
+    if (!bottom_row.isApprox(Eigen::Vector4d{0.0, 0.0, 0.0, 1.0}, kRigidTransformTolerance)) {
+        return std::unexpected(std::format(
+            "{}.t_bs: expected bottom row [0, 0, 0, 1], found [{}, {}, {}, {}]",
+            field_name,
+            bottom_row.x(),
+            bottom_row.y(),
+            bottom_row.z(),
+            bottom_row.w()));
     }
     return camera.t_bs;
 }
 
 }  // namespace
 
-ParseResult<Eigen::Matrix4d> body_from_camera_transform(const CameraCalibration& camera) {
-    return validate_camera_extrinsics(camera);
+ParseResult<Eigen::Matrix4d> body_from_camera_transform(
+    const CameraCalibration& camera,
+    std::string_view field_name) {
+    return validate_camera_extrinsics(camera, field_name);
 }
 
-ParseResult<Eigen::Matrix4d> camera_from_body_transform(const CameraCalibration& camera) {
-    const auto body_from_camera = validate_camera_extrinsics(camera);
+ParseResult<Eigen::Matrix4d> camera_from_body_transform(
+    const CameraCalibration& camera,
+    std::string_view field_name) {
+    const auto body_from_camera = validate_camera_extrinsics(camera, field_name);
     if (!body_from_camera) {
         return std::unexpected(body_from_camera.error());
     }

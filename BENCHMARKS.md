@@ -34,6 +34,9 @@ is measured, why it matters, and where the value comes from.
 | Measurement model inverse-pose convention | `tests/measurement_model_test.cpp` | Nontrivial `R_WB` and `p_WB` | Body-frame landmark and pixel match hand-derived values within `1e-12` | Passing |
 | Measurement model camera-baseline split | `tests/measurement_model_test.cpp` | Cam0 identity, cam1 positive x baseline | Cam0 `(320,240)`, cam1 `(300,240)` within `1e-12` | Passing |
 | Measurement model boundary contract | `tests/measurement_model_test.cpp` | Behind-camera and out-of-frame landmarks | Prediction returned; visibility gating left outside `h(.)` | Passing |
+| Measurement model image-border projection | `tests/measurement_model_test.cpp` | Landmarks on the exact image edges | Pixels equal `(640,480)` and `(0,0)` within `1e-12` | Passing |
+| Measurement model nonpositive-depth contract | `tests/measurement_model_test.cpp` | Landmarks at `Z = 0` and `Z = -3` | Success returned; zero depth is non-finite, negative depth can be finite, caller must gate | Passing |
+| Measurement model vs. synthetic harness | `tests/measurement_model_test.cpp` | 20 Hz, 1 s, accelerating and yawing trajectory, 5 landmarks, stereo rig | Every noiseless harness pixel reproduced within `1e-9` | Passing |
 | EuRoC IMU-only smoke position error | `tests/propagation_test.cpp` | MH_01_easy, 1 s from first ground truth | `< 2.0 m` | Passing |
 | EuRoC IMU-only smoke velocity error | `tests/propagation_test.cpp` | MH_01_easy, 1 s from first ground truth | `< 3.0 m/s` | Passing |
 | EuRoC IMU-only smoke orientation error | `tests/propagation_test.cpp` | MH_01_easy, 1 s from first ground truth | `< 0.5 rad` | Passing |

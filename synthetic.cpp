@@ -140,8 +140,8 @@ ParseResult<void> validate_rectified_stereo(
 }
 
 ParseResult<void> validate_camera(const CameraCalibration& calibration, std::string_view camera_name) {
-    if (auto rigid = body_from_camera_transform(calibration); !rigid) {
-        return std::unexpected(std::format("{}: {}", camera_name, rigid.error()));
+    if (auto rigid = body_from_camera_transform(calibration, camera_name); !rigid) {
+        return std::unexpected(rigid.error());
     }
 
     if (calibration.resolution.x() <= 0 || calibration.resolution.y() <= 0) {
@@ -382,8 +382,8 @@ ParseResult<std::vector<SyntheticStereoObservation>> synthesize_stereo_observati
         return std::unexpected(valid.error());
     }
 
-    const auto cam0_from_body = camera_from_body_transform(cam0_calibration);
-    const auto cam1_from_body = camera_from_body_transform(cam1_calibration);
+    const auto cam0_from_body = camera_from_body_transform(cam0_calibration, "cam0");
+    const auto cam1_from_body = camera_from_body_transform(cam1_calibration, "cam1");
     if (!cam0_from_body || !cam1_from_body) {
         return std::unexpected("camera extrinsics: validation changed after camera validation");
     }

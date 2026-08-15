@@ -4,12 +4,20 @@
 #include "state.hpp"
 #include "types.hpp"
 
+#include <string_view>
+
 #include <Eigen/Core>
 
 // T_BS maps camera-frame points into the body frame; the inverse is computed
 // from the validated rigid transform without a general matrix inversion.
-ParseResult<Eigen::Matrix4d> body_from_camera_transform(const CameraCalibration& camera);
-ParseResult<Eigen::Matrix4d> camera_from_body_transform(const CameraCalibration& camera);
+// `field_name` prefixes validation errors so multi-camera callers can name the
+// offending calibration instead of reporting a generic one.
+ParseResult<Eigen::Matrix4d> body_from_camera_transform(
+    const CameraCalibration& camera,
+    std::string_view field_name = "camera");
+ParseResult<Eigen::Matrix4d> camera_from_body_transform(
+    const CameraCalibration& camera,
+    std::string_view field_name = "camera");
 
 ParseResult<Eigen::Vector3d> camera_point_to_world(
     const NominalState& robot,

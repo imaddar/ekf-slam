@@ -1,5 +1,7 @@
 #include "measurement_model.hpp"
 
+#include "synthetic.hpp"
+
 #include <cmath>
 #include <numbers>
 
@@ -8,6 +10,9 @@
 namespace {
 
 constexpr double kTolerance = 1e-12;
+// h(.) and the harness apply the same transform in the same order, so the gap
+// is float rounding only, not a modelling difference.
+constexpr double kHarnessTolerance = 1e-9;
 
 CameraCalibration make_camera(
     const Eigen::Matrix4d& t_bs = Eigen::Matrix4d::Identity(),
@@ -158,4 +163,94 @@ TEST(MeasurementModelTest, RejectsInvalidCameraCalibrationButDoesNotGateDepthOrI
         make_camera());
     ASSERT_TRUE(outside_image) << outside_image.error();
     EXPECT_TRUE(outside_image->pixel.isApprox(Eigen::Vector2d{1320.0, 240.0}, kTolerance));
+}
+
+// fx=500, cx=320, width=640 puts the right image edge at normalized x = 0.64;
+// fy=600, cy=240, height=480 puts the bottom edge at normalized y = 0.4.
+TEST(MeasurementModelTest, LandmarksOnTheImageBorderProjectToTheBoundaryPixels) {
+    const auto bottom_right = predict_pinhole_pixel(
+        Sophus::SO3d{},
+        Eigen::Vector3d::Zero(),
+        Eigen::Vector3d{0.64, 0.4, 1.0},
+        make_camera());
+    const auto top_left = predict_pinhole_pixel(
+        Sophus::SO3d{},
+        Eigen::Vector3d::Zero(),
+        Eigen::Vector3d{-0.64, -0.4, 1.0},
+        make_camera());
+
+    ASSERT_TRUE(bottom_right) << bottom_right.error();
+    ASSERT_TRUE(top_left) << top_left.error();
+    // Absolute, not isApprox: the relative form never matches a zero expectation.
+    EXPECT_LT((bottom_right->pixel - Eigen::Vector2d{640.0, 480.0}).norm(), kTolerance);
+    EXPECT_LT(top_left->pixel.norm(), kTolerance);
+}
+
+// Pins the cost of leaving visibility gating out of h(.): allFinite() catches
+// only numerical degeneracy, not behind-camera geometry.
+TEST(MeasurementModelTest, NonPositiveDepthReturnsSuccessButRequiresExplicitVisibilityGating) {
+    const auto zero_depth = predict_pinhole_pixel(
+        Sophus::SO3d{},
+        Eigen::Vector3d::Zero(),
+        Eigen::Vector3d{1.0, 0.0, 0.0},
+        make_camera());
+    const auto negative_depth = predict_pinhole_pixel(
+        Sophus::SO3d{},
+        Eigen::Vector3d::Zero(),
+        Eigen::Vector3d{6.0, 0.0, -3.0},
+        make_camera());
+
+    ASSERT_TRUE(zero_depth) << zero_depth.error();
+    ASSERT_TRUE(negative_depth) << negative_depth.error();
+    EXPECT_DOUBLE_EQ(zero_depth->landmark_camera.z(), 0.0);
+    EXPECT_FALSE(zero_depth->pixel.allFinite());
+    EXPECT_DOUBLE_EQ(negative_depth->landmark_camera.z(), -3.0);
+    EXPECT_TRUE(negative_depth->pixel.allFinite());
+    EXPECT_TRUE(negative_depth->normalized.isApprox(Eigen::Vector2d{-2.0, -0.0}, kTolerance));
+}
+
+// h(.) and the synthetic harness project independently; without this check the
+// two could drift apart and every synthetic update test would still pass.
+TEST(MeasurementModelTest, ReproducesNoiselessSyntheticHarnessPixels) {
+    const SyntheticTrajectory trajectory{
+        .initial_position = Eigen::Vector3d{0.3, -0.2, 0.0},
+        .initial_velocity = Eigen::Vector3d{0.5, 0.0, 0.0},
+        .world_acceleration = Eigen::Vector3d{0.0, 0.2, 0.0},
+        .body_angular_velocity = Eigen::Vector3d{0.0, 0.0, 0.15},
+    };
+    const auto landmarks = make_synthetic_landmarks();
+    const CameraCalibration cam0 =
+        make_synthetic_pinhole_camera_calibration(Eigen::Matrix4d::Identity());
+    const CameraCalibration cam1 =
+        make_synthetic_pinhole_camera_calibration(make_transform(
+            Eigen::Vector3d::Zero(),
+            Eigen::Vector3d{0.2, 0.0, 0.0}));
+    const SyntheticCameraConfig config{.rate_hz = 20.0, .duration_seconds = 1.0};
+
+    const auto observations =
+        synthesize_stereo_observations(trajectory, landmarks, cam0, cam1, config);
+
+    ASSERT_TRUE(observations) << observations.error();
+    ASSERT_FALSE(observations->empty());
+
+    for (const auto& observation : *observations) {
+        const auto landmark = std::ranges::find(
+            landmarks, observation.landmark_id, &SyntheticLandmark::id);
+        ASSERT_NE(landmark, landmarks.end());
+
+        const auto truth = trajectory.state_at(trajectory.time_at(observation.timestamp));
+        const Sophus::SO3d rotation_world_from_body{truth.orientation};
+
+        const auto cam0_prediction = predict_pinhole_pixel(
+            rotation_world_from_body, truth.position, landmark->position_world, cam0);
+        const auto cam1_prediction = predict_pinhole_pixel(
+            rotation_world_from_body, truth.position, landmark->position_world, cam1);
+
+        ASSERT_TRUE(cam0_prediction) << cam0_prediction.error();
+        ASSERT_TRUE(cam1_prediction) << cam1_prediction.error();
+        EXPECT_LT((cam0_prediction->pixel - observation.cam0_pixel).norm(), kHarnessTolerance)
+            << "landmark " << observation.landmark_id << " at t=" << observation.timestamp;
+        EXPECT_LT((cam1_prediction->pixel - observation.cam1_pixel).norm(), kHarnessTolerance)
+            << "landmark " << observation.landmark_id << " at t=" << observation.timestamp;
+    }
 }

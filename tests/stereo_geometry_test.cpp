@@ -103,6 +103,27 @@ TEST(StereoGeometryTest, RejectsReflectionExtrinsics) {
     EXPECT_NE(result.error().find("proper rotation"), std::string::npos);
 }
 
+TEST(StereoGeometryTest, ExtrinsicsErrorsNameTheFieldAndReportWhatWasFound) {
+    Eigen::Matrix4d bad_bottom_row = Eigen::Matrix4d::Identity();
+    bad_bottom_row(3, 2) = 0.001;
+
+    const auto unnamed = body_from_camera_transform(make_camera(bad_bottom_row));
+    ASSERT_FALSE(unnamed);
+    EXPECT_NE(unnamed.error().find("camera.t_bs"), std::string::npos) << unnamed.error();
+    EXPECT_NE(unnamed.error().find("0.001"), std::string::npos) << unnamed.error();
+
+    const auto named = camera_from_body_transform(make_camera(bad_bottom_row), "cam1");
+    ASSERT_FALSE(named);
+    EXPECT_NE(named.error().find("cam1.t_bs"), std::string::npos) << named.error();
+
+    Eigen::Matrix4d reflection = Eigen::Matrix4d::Identity();
+    reflection(0, 0) = -1.0;
+    const auto improper = body_from_camera_transform(make_camera(reflection), "cam0");
+    ASSERT_FALSE(improper);
+    EXPECT_NE(improper.error().find("cam0.t_bs"), std::string::npos) << improper.error();
+    EXPECT_NE(improper.error().find("-1"), std::string::npos) << improper.error();
+}
+
 TEST(StereoGeometryTest, RejectsNonFiniteWorldPoint) {
     const Eigen::Vector3d invalid{
         std::numeric_limits<double>::quiet_NaN(), 2.0, 3.0};

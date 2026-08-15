@@ -1,33 +1,14 @@
 #include "measurement_model.hpp"
 
-#include <cmath>
+#include "stereo_geometry.hpp"
+
 #include <format>
 
 namespace {
 
-constexpr double kRigidTransformTolerance = 1e-9;
-
-ParseResult<void> validate_camera_model(const CameraCalibration& camera) {
-    if (!camera.t_bs.allFinite()) {
-        return std::unexpected("camera.t_bs: expected finite values");
-    }
-
-    const Eigen::Matrix3d rotation = camera.t_bs.block<3, 3>(0, 0);
-    if (!(rotation.transpose() * rotation).isApprox(Eigen::Matrix3d::Identity(), kRigidTransformTolerance)
-        || std::abs(rotation.determinant() - 1.0) > kRigidTransformTolerance) {
-        return std::unexpected("camera.t_bs: expected a rotation block in SO(3)");
-    }
-
-    const Eigen::Vector4d bottom_row = camera.t_bs.row(3);
-    if ((bottom_row - Eigen::Vector4d{0.0, 0.0, 0.0, 1.0}).norm() > kRigidTransformTolerance) {
-        return std::unexpected(std::format(
-            "camera.t_bs: expected bottom row [0, 0, 0, 1], found [{}, {}, {}, {}]",
-            bottom_row.x(),
-            bottom_row.y(),
-            bottom_row.z(),
-            bottom_row.w()));
-    }
-
+// The extrinsic is validated by camera_from_body_transform, which also supplies
+// the inverse; only the intrinsics need a check the geometry path does not do.
+ParseResult<void> validate_camera_intrinsics(const CameraCalibration& camera) {
     if (!camera.intrinsics.allFinite()) {
         return std::unexpected("camera.intrinsics: expected finite fx, fy, cx, cy");
     }
@@ -57,17 +38,20 @@ ParseResult<PinholePixelPrediction> predict_pinhole_pixel(
     if (!landmark_world.allFinite()) {
         return std::unexpected("landmark_world: expected finite XYZ coordinates");
     }
-    if (const auto valid = validate_camera_model(camera); !valid) {
+    if (const auto valid = validate_camera_intrinsics(camera); !valid) {
         return std::unexpected(valid.error());
     }
-
-    const Eigen::Matrix3d rotation_body_from_camera = camera.t_bs.block<3, 3>(0, 0);
-    const Eigen::Vector3d position_body_from_camera = camera.t_bs.block<3, 1>(0, 3);
+    const auto camera_from_body = camera_from_body_transform(camera);
+    if (!camera_from_body) {
+        return std::unexpected(camera_from_body.error());
+    }
 
     const Eigen::Vector3d landmark_body =
         rotation_world_from_body.inverse() * (landmark_world - position_world_from_body);
-    const Eigen::Vector3d landmark_camera =
-        rotation_body_from_camera.transpose() * (landmark_body - position_body_from_camera);
+    const Eigen::Vector3d landmark_camera = camera_from_body->block<3, 3>(0, 0) * landmark_body
+        + camera_from_body->block<3, 1>(0, 3);
+    // Ungated by design: callers must check Z > 0 and image bounds before
+    // forming an innovation. Z == 0 is non-finite; Z < 0 can still be finite.
     const Eigen::Vector2d normalized{
         landmark_camera.x() / landmark_camera.z(),
         landmark_camera.y() / landmark_camera.z(),

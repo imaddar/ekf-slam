@@ -224,9 +224,12 @@ agreement between injected noise and the calibration densities.
 - `camera_point_to_world(robot, camera, point_camera)` and
   `world_point_to_camera(robot, camera, point_world)` — public. Apply the
   validated metric XYZ frame transforms using `CameraCalibration::t_bs`.
-- `body_from_camera_transform(camera)` and `camera_from_body_transform(camera)` —
-  public. Validate and return the rigid `T_BS` transform or its precomputed
-  inverse for callers such as the synthetic projection harness.
+- `body_from_camera_transform(camera, field_name)` and
+  `camera_from_body_transform(camera, field_name)` — public. Validate and return
+  the rigid `T_BS` transform or its precomputed inverse for callers such as the
+  synthetic projection harness and the pinhole measurement model. `field_name`
+  defaults to `camera` and prefixes validation errors, so a multi-camera caller
+  reports `cam1.t_bs: ...` rather than a generic field.
 - `predict_pinhole_pixel(R_WB, p_WB, landmark_world, camera)` — public. Applies
   the pure pinhole measurement model for one landmark and one camera without
   visibility gating, noise, covariance access, or update-step state slicing.
@@ -389,6 +392,13 @@ augmentation remains future work.
   camera-frame points into the body frame. The metric XYZ forward map applies
   `l_W = R_WB (R_BS l_C + p_BS) + p_WB`; keeping the direction explicit avoids
   an accidental inverse when augmentation is added.
+- **One extrinsics validator.** `stereo_geometry.cpp` owns the only rigid-transform
+  check; the synthetic harness and the pinhole measurement model call it rather
+  than carrying their own. Separate copies would let the harness accept a
+  calibration the filter rejects, and a resulting mismatch would surface much
+  later as a Jacobian or triangulation failure rather than as a calibration
+  error. Errors carry a caller-supplied field name and the offending values so
+  a shared validator does not cost per-camera diagnostics.
 - **Classic EKF-SLAM with a bounded active map.** Landmarks will live in the
   filter state, so the covariance grows as `O(n^2)` in the active landmark
   count. This is intentional for the first full SLAM implementation because it
@@ -474,7 +484,21 @@ augmentation remains future work.
   pixels outside the image are frontend/association decisions, not measurement
   geometry. Keeping those checks out makes the model a predictable map from a
   supplied state hypothesis to a pixel prediction. The cost is that callers must
-  only use valid correspondences when forming an EKF innovation.
+  only use valid correspondences when forming an EKF innovation: at `Z = 0` the
+  model returns success with a non-finite pixel, while `Z < 0` can still return a
+  finite pixel. A test pins both cases so the update step treats visibility
+  gating as its own responsibility instead of relying on `allFinite()`.
+- **The extrinsic transform and its validation come from `stereo_geometry`.**
+  `predict_pinhole_pixel(...)` calls `camera_from_body_transform(...)` rather
+  than re-deriving `R_BS^T` and re-checking `T_BS`, so a calibration accepted by
+  one frame path cannot be rejected by the other, and the `SE(3)` inverse exists
+  in one place.
+- **`h(.)` is cross-checked against the synthetic harness.** The harness projects
+  landmarks through its own code path, so a test asserts the two agree on
+  noiseless pixels. Without it the two implementations could drift apart and
+  every synthetic update test would still pass. The comparison uses exact pixels
+  only; noisy measurements are reserved for update-step tests, where a mismatch
+  would otherwise be ambiguous between a projection bug and expected noise.
 - **Distortion is excluded from the state measurement model.** Measurements are
   expected to be undistorted before innovation computation. The EuRoC distortion
   coefficients are fixed calibration constants, so carrying them through
@@ -643,7 +667,7 @@ behavior yet.
 
 ## Tests
 
-72 GoogleTest cases across seven binaries, run through CTest:
+76 GoogleTest cases across seven binaries, run through CTest:
 
 - `tests/parser_test.cpp` — inline YAML/CSV fixtures plus a smoke test against
   `datasets/machine_hall/MH_01_easy`.
@@ -657,8 +681,9 @@ behavior yet.
 - `tests/stereo_geometry_test.cpp` — metric XYZ frame-map identity,
   round-trip, nonzero-extrinsic, and rigid-transform validation cases.
 - `tests/measurement_model_test.cpp` — pure pinhole projection, inverse-pose
-  convention, per-camera baseline behavior, and the no-visibility-gating
-  contract for `h(.)`.
+  convention, per-camera baseline behavior, the no-visibility-gating
+  contract for `h(.)`, and agreement with the synthetic harness on noiseless
+  pixels.
 - `tests/synthetic_test.cpp` — the synthetic harness, and propagation against
   analytic truth up to the headline fully excited case.
 
