@@ -643,7 +643,7 @@ behavior yet.
 
 ## Tests
 
-65 GoogleTest cases across six binaries, run through CTest:
+72 GoogleTest cases across seven binaries, run through CTest:
 
 - `tests/parser_test.cpp` — inline YAML/CSV fixtures plus a smoke test against
   `datasets/machine_hall/MH_01_easy`.
@@ -656,6 +656,9 @@ behavior yet.
   covariance consistency check, and a 1 s EuRoC IMU-only smoke test.
 - `tests/stereo_geometry_test.cpp` — metric XYZ frame-map identity,
   round-trip, nonzero-extrinsic, and rigid-transform validation cases.
+- `tests/measurement_model_test.cpp` — pure pinhole projection, inverse-pose
+  convention, per-camera baseline behavior, and the no-visibility-gating
+  contract for `h(.)`.
 - `tests/synthetic_test.cpp` — the synthetic harness, and propagation against
   analytic truth up to the headline fully excited case.
 

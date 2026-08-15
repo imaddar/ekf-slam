@@ -29,6 +29,11 @@ is measured, why it matters, and where the value comes from.
 | Seeded IMU noise reproducibility | `tests/synthetic_test.cpp` | Explicit IMU noise seed | Same seed reproduces samples; noise differs from noiseless output | Passing |
 | Injected noise vs. calibration | `tests/synthetic_test.cpp` | 200 Hz, 100 s, densities `0.01` and `0.002` | Residual stddev within 5% of `density * sqrt(rate)` | Passing |
 | Seeded pixel noise reproducibility | `tests/synthetic_test.cpp` | Explicit pixel noise seed | Same seed reproduces observations; noise differs from noiseless output | Passing |
+| Measurement model optical axis | `tests/measurement_model_test.cpp` | `T_WB = T_BS = I`, landmark on optical axis | Pixel equals principal point within `1e-12` | Passing |
+| Measurement model ray-depth invariance | `tests/measurement_model_test.cpp` | Same ray at depths 1 m and 5 m | Identical pixel prediction within `1e-12` | Passing |
+| Measurement model inverse-pose convention | `tests/measurement_model_test.cpp` | Nontrivial `R_WB` and `p_WB` | Body-frame landmark and pixel match hand-derived values within `1e-12` | Passing |
+| Measurement model camera-baseline split | `tests/measurement_model_test.cpp` | Cam0 identity, cam1 positive x baseline | Cam0 `(320,240)`, cam1 `(300,240)` within `1e-12` | Passing |
+| Measurement model boundary contract | `tests/measurement_model_test.cpp` | Behind-camera and out-of-frame landmarks | Prediction returned; visibility gating left outside `h(.)` | Passing |
 | EuRoC IMU-only smoke position error | `tests/propagation_test.cpp` | MH_01_easy, 1 s from first ground truth | `< 2.0 m` | Passing |
 | EuRoC IMU-only smoke velocity error | `tests/propagation_test.cpp` | MH_01_easy, 1 s from first ground truth | `< 3.0 m/s` | Passing |
 | EuRoC IMU-only smoke orientation error | `tests/propagation_test.cpp` | MH_01_easy, 1 s from first ground truth | `< 0.5 rad` | Passing |
@@ -120,4 +125,3 @@ Initial reporting fields:
 - When a tolerance is empirical, record the measured value that justified it.
 - Do not replace unit tests with this file; add or update tests first, then
   update this file with the metric name and current result.
-

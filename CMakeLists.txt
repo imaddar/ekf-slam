@@ -19,6 +19,7 @@ add_library(ekf_slam_parser
     parser_csv.cpp
     parser.cpp
     parser_yaml.cpp
+    measurement_model.cpp
     propagation.cpp
     slam_state.cpp
     stereo_geometry.cpp
@@ -129,6 +130,25 @@ if(BUILD_TESTING)
     )
 
     gtest_discover_tests(stereo_geometry_tests)
+
+    add_executable(measurement_model_tests
+        tests/measurement_model_test.cpp
+    )
+
+    target_link_libraries(measurement_model_tests
+        PRIVATE
+            ekf_slam_parser
+            GTest::gtest_main
+    )
+
+    target_compile_options(measurement_model_tests
+        PRIVATE
+            -Wall
+            -Wextra
+            -Werror
+    )
+
+    gtest_discover_tests(measurement_model_tests)
 
     add_executable(propagation_tests
         tests/propagation_test.cpp
