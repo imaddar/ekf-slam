@@ -17,6 +17,7 @@ parser_yaml.hpp/cpp Internal EuRoC calibration YAML parsing
 propagation.hpp/cpp Public IMU nominal-state propagation
 state.hpp           Public nominal ESEKF state and covariance types
 slam_state.hpp/cpp  Public SLAM state, registry, and covariance storage
+stereo_geometry.hpp/cpp Camera/body/world metric XYZ frame transforms
 synthetic.hpp/cpp   Public synthetic analytic trajectory and IMU generator
 types.hpp           C++ parser output type declarations
 roadmap.md          Planned parser API direction
@@ -31,9 +32,9 @@ tests/synthetic_test.cpp Synthetic trajectory and IMU propagation tests
 
 There is a public nominal ESEKF state layout, IMU-only state covariance type,
 preallocated SLAM state storage container with metric XYZ landmark registry and
-batch compaction, IMU nominal-state and covariance propagation, and joint SLAM
-covariance propagation. The full error-state struct, state augmentation, and
-measurement update do not exist yet. A synthetic data harness exists for
+batch compaction, IMU nominal-state and covariance propagation, joint SLAM
+covariance propagation, and metric XYZ stereo geometry. The full error-state
+struct, state augmentation, and measurement update do not exist yet. A synthetic data harness exists for
 controlled pre-EuRoC validation of propagation behavior.
 
 ## C++ root skeleton
@@ -71,6 +72,11 @@ active `P_rl` and `P_ll` views are bounded by the active landmark count, and
 `propagate_slam(...)` updates the robot state, `P_rr`, and `P_rl` without
 allocating an augmented transition matrix. `P_ll` remains unchanged during
 prediction; augmentation math does not exist yet.
+
+`stereo_geometry.hpp/cpp` defines the rigid frame maps used by metric XYZ
+initialization. `CameraCalibration::t_bs` is body-from-camera (`T_BS`), so a
+camera point maps through `R_BS` and `p_BS`, then through the robot's
+world-from-body pose. Both directions validate the calibration extrinsic.
 
 `propagation.hpp` exposes `PropagationResult` and `propagate(...)`, which
 returns `ParseResult<PropagationResult>`. The propagation function takes a
@@ -201,6 +207,9 @@ agreement between injected noise and the calibration densities.
   dense compaction pass and rebuilds the ID registry.
 - `propagate_slam(slam_state, measurement, imu_calibration, timestep_seconds)` —
   public. Propagates the nominal robot state and joint covariance in place.
+- `camera_point_to_world(robot, camera, point_camera)` and
+  `world_point_to_camera(robot, camera, point_world)` — public. Apply the
+  validated metric XYZ frame transforms using `CameraCalibration::t_bs`.
 
 Lower-level YAML, CSV, and stereo-pair parsing functions are private
 implementation details in `parser_yaml.cpp` and `parser_csv.cpp`. Planned future
@@ -344,7 +353,7 @@ Three commitments drive most of the rest:
 
 These choices are settled design direction for the landmark filter and replace
 earlier inverse-depth planning. The implemented portions are described above;
-joint covariance propagation and augmentation remain future work.
+augmentation remains future work.
 
 - **Metric XYZ landmarks from stereo triangulation.** Each landmark will add a
   3-dimensional Euclidean position in the world frame. This directly matches the
@@ -356,6 +365,10 @@ joint covariance propagation and augmentation remain future work.
   more subtle Jacobians are not worth the complexity. If the project later moves
   to larger spatial scale, long-range landmarks, or monocular initialization,
   inverse depth should be reconsidered.
+- **Body-from-camera extrinsics.** `CameraCalibration::t_bs` is `T_BS`, mapping
+  camera-frame points into the body frame. The metric XYZ forward map applies
+  `l_W = R_WB (R_BS l_C + p_BS) + p_WB`; keeping the direction explicit avoids
+  an accidental inverse when augmentation is added.
 - **Classic EKF-SLAM with a bounded active map.** Landmarks will live in the
   filter state, so the covariance grows as `O(n^2)` in the active landmark
   count. This is intentional for the first full SLAM implementation because it
@@ -591,7 +604,7 @@ behavior yet.
 
 ## Tests
 
-59 GoogleTest cases across five binaries, run through CTest:
+63 GoogleTest cases across six binaries, run through CTest:
 
 - `tests/parser_test.cpp` — inline YAML/CSV fixtures plus a smoke test against
   `datasets/machine_hall/MH_01_easy`.
@@ -602,6 +615,8 @@ behavior yet.
 - `tests/propagation_test.cpp` — nominal and joint integration, covariance
   transition and process-noise blocks, timestep validation, a Monte Carlo
   covariance consistency check, and a 1 s EuRoC IMU-only smoke test.
+- `tests/stereo_geometry_test.cpp` — metric XYZ frame-map identity,
+  round-trip, nonzero-extrinsic, and rigid-transform validation cases.
 - `tests/synthetic_test.cpp` — the synthetic harness, and propagation against
   analytic truth up to the headline fully excited case.
 
