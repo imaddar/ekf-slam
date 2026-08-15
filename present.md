@@ -6,7 +6,8 @@ problem, approach, implementation, metrics, results, lessons, contribution.
 **Status as of 2026-08-14.** Implemented: EuRoC dataset parser, nominal ESEKF
 state, joint covariance propagation, metric XYZ stereo geometry, a synthetic
 ground-truth harness, metric XYZ augmentation Jacobians, anisotropic rectified
-stereo triangulation covariance, metric XYZ state augmentation, and 88 tests. Not
+stereo triangulation covariance, metric XYZ state augmentation, analytical
+camera measurement Jacobian blocks, and 90 tests. Not
 implemented: raw EuRoC stereo undistortion/rectification, camera measurement
 update, ATE/RPE/NEES evaluation, ROS 2, Jetson deployment. Every number below is
 measured; nothing is projected. Keep that boundary explicit when presenting —
@@ -153,6 +154,7 @@ parser.cpp / parser_yaml.cpp / parser_csv.cpp   EuRoC loading (hand-written YAML
 state.hpp                                       NominalState, IMU-only ImuStateCovariance
 propagation.cpp                                 IMU-only nominal + covariance propagation
 slam_state.hpp/cpp                              bounded joint SLAM state and registry
+measurement_model.cpp                           pinhole prediction and sparse camera Jacobians
 synthetic.cpp                                   analytic trajectory, IMU, stereo generator
 ```
 
@@ -167,6 +169,27 @@ and batch compaction for removal. Joint covariance propagation now updates
 `P_rr` and `P_rl` with the shared robot transition while leaving `P_ll`
 unchanged. Camera measurement update remains a separate stage. `T_BS` is explicitly
 body-from-camera, matching the existing synthetic projection convention.
+
+### Camera linearization: the bridge to an update
+
+For a camera-frame point `l_C = (X, Y, Z)`, the projection factor is:
+
+```text
+J_pixel_C = [ fx/Z,    0, -fx X/Z^2
+                  0, fy/Z, -fy Y/Z^2 ]
+```
+
+The new measurement Jacobian chains this factor through the camera extrinsic
+and the robot pose. It returns a compact pose block ordered `[delta p_W,
+delta theta_B]` and one `2x3` world-landmark block, rather than a mostly-zero
+dense matrix. Direct pixels do not depend on velocity, IMU biases, or other
+landmarks, so these are the only blocks the eventual EKF update needs.
+
+The regression test checks central finite differences across five nontrivial
+pose, extrinsic, and landmark combinations. It perturbs position and orientation
+separately, exposing a rotation-first-versus-position-first layout bug. The
+identity case also pins the intuitive result: the landmark block is exactly the
+projection factor and the position block is its negative.
 
 ### The propagation step
 

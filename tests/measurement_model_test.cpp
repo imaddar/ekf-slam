@@ -1,8 +1,10 @@
 #include "measurement_model.hpp"
 
+#include "stereo_geometry.hpp"
 #include "synthetic.hpp"
 
 #include <cmath>
+#include <array>
 #include <numbers>
 
 #include <gtest/gtest.h>
@@ -35,6 +37,88 @@ Eigen::Matrix4d make_transform(
     return transform;
 }
 
+Eigen::Matrix<double, 2, 3> finite_difference_landmark(
+    const Sophus::SO3d& rotation_world_from_body,
+    const Eigen::Vector3d& position_world_from_body,
+    const Eigen::Vector3d& landmark_world,
+    const CameraCalibration& camera) {
+    constexpr double kStep = 1e-6;
+    Eigen::Matrix<double, 2, 3> result;
+    const auto base = predict_pinhole_pixel(
+        rotation_world_from_body, position_world_from_body, landmark_world, camera);
+    EXPECT_TRUE(base) << base.error();
+    for (int column = 0; column < 3; ++column) {
+        Eigen::Vector3d plus_landmark = landmark_world;
+        Eigen::Vector3d minus_landmark = landmark_world;
+        plus_landmark(column) += kStep;
+        minus_landmark(column) -= kStep;
+        const auto plus = predict_pinhole_pixel(
+            rotation_world_from_body, position_world_from_body, plus_landmark, camera);
+        const auto minus = predict_pinhole_pixel(
+            rotation_world_from_body, position_world_from_body, minus_landmark, camera);
+        EXPECT_TRUE(plus) << plus.error();
+        EXPECT_TRUE(minus) << minus.error();
+        result.col(column) = (plus->pixel - minus->pixel) / (2.0 * kStep);
+    }
+    return result;
+}
+
+Eigen::Matrix<double, 2, 3> finite_difference_position(
+    const Sophus::SO3d& rotation_world_from_body,
+    const Eigen::Vector3d& position_world_from_body,
+    const Eigen::Vector3d& landmark_world,
+    const CameraCalibration& camera) {
+    constexpr double kStep = 1e-6;
+    Eigen::Matrix<double, 2, 3> result;
+    const auto base = predict_pinhole_pixel(
+        rotation_world_from_body, position_world_from_body, landmark_world, camera);
+    EXPECT_TRUE(base) << base.error();
+    for (int column = 0; column < 3; ++column) {
+        Eigen::Vector3d plus_position = position_world_from_body;
+        Eigen::Vector3d minus_position = position_world_from_body;
+        plus_position(column) += kStep;
+        minus_position(column) -= kStep;
+        const auto plus = predict_pinhole_pixel(
+            rotation_world_from_body, plus_position, landmark_world, camera);
+        const auto minus = predict_pinhole_pixel(
+            rotation_world_from_body, minus_position, landmark_world, camera);
+        EXPECT_TRUE(plus) << plus.error();
+        EXPECT_TRUE(minus) << minus.error();
+        result.col(column) = (plus->pixel - minus->pixel) / (2.0 * kStep);
+    }
+    return result;
+}
+
+Eigen::Matrix<double, 2, 3> finite_difference_orientation(
+    const Sophus::SO3d& rotation_world_from_body,
+    const Eigen::Vector3d& position_world_from_body,
+    const Eigen::Vector3d& landmark_world,
+    const CameraCalibration& camera) {
+    constexpr double kStep = 1e-6;
+    Eigen::Matrix<double, 2, 3> result;
+    const auto base = predict_pinhole_pixel(
+        rotation_world_from_body, position_world_from_body, landmark_world, camera);
+    EXPECT_TRUE(base) << base.error();
+    for (int column = 0; column < 3; ++column) {
+        Eigen::Vector3d perturbation = Eigen::Vector3d::Zero();
+        perturbation(column) = kStep;
+        const auto plus = predict_pinhole_pixel(
+            rotation_world_from_body * Sophus::SO3d::exp(perturbation),
+            position_world_from_body,
+            landmark_world,
+            camera);
+        const auto minus = predict_pinhole_pixel(
+            rotation_world_from_body * Sophus::SO3d::exp(-perturbation),
+            position_world_from_body,
+            landmark_world,
+            camera);
+        EXPECT_TRUE(plus) << plus.error();
+        EXPECT_TRUE(minus) << minus.error();
+        result.col(column) = (plus->pixel - minus->pixel) / (2.0 * kStep);
+    }
+    return result;
+}
+
 }  // namespace
 
 TEST(MeasurementModelTest, OpticalAxisProjectsToPrincipalPoint) {
@@ -46,6 +130,114 @@ TEST(MeasurementModelTest, OpticalAxisProjectsToPrincipalPoint) {
 
     ASSERT_TRUE(prediction) << prediction.error();
     EXPECT_TRUE(prediction->pixel.isApprox(Eigen::Vector2d{320.0, 240.0}, kTolerance));
+}
+
+TEST(MeasurementModelTest, MeasurementJacobiansMatchWorldFrameFiniteDifferencesAndStateLayout) {
+    struct JacobianCase {
+        Sophus::SO3d rotation_world_from_body;
+        Eigen::Vector3d position_world_from_body;
+        Eigen::Vector3d landmark_world;
+        CameraCalibration camera;
+    };
+    const std::array cases{
+        JacobianCase{
+            Sophus::SO3d::exp(Eigen::Vector3d{0.2, -0.1, 0.3}),
+            Eigen::Vector3d{1.0, -2.0, 0.5},
+            Eigen::Vector3d{3.0, 1.0, 6.0},
+            make_camera(make_transform(
+                Eigen::Vector3d{0.1, -0.2, 0.05}, Eigen::Vector3d{0.2, -0.1, 0.3})),
+        },
+        JacobianCase{Sophus::SO3d{}, Eigen::Vector3d::Zero(), Eigen::Vector3d{2.0, -3.0, 3.0}, make_camera()},
+        JacobianCase{
+            Sophus::SO3d::exp(Eigen::Vector3d{-0.3, 0.2, -0.1}),
+            Eigen::Vector3d{-1.0, 0.5, 0.2},
+            Eigen::Vector3d{0.0, 3.0, 7.0},
+            make_camera(),
+        },
+        JacobianCase{
+            Sophus::SO3d::exp(Eigen::Vector3d{0.1, 0.2, -0.2}),
+            Eigen::Vector3d{0.5, -1.0, 2.0},
+            Eigen::Vector3d{4.0, 0.0, 8.0},
+            make_camera(make_transform(Eigen::Vector3d::Zero(), Eigen::Vector3d{0.3, 0.0, 0.0})),
+        },
+        JacobianCase{
+            Sophus::SO3d::exp(Eigen::Vector3d{0.05, -0.15, 0.25}),
+            Eigen::Vector3d{2.0, 1.0, -0.5},
+            Eigen::Vector3d{3.5, -2.0, 5.0},
+            make_camera(make_transform(
+                Eigen::Vector3d{-0.1, 0.05, 0.2}, Eigen::Vector3d{-0.1, 0.2, 0.1})),
+        },
+    };
+
+    for (const auto& test_case : cases) {
+        const auto prediction = predict_pinhole_pixel(
+            test_case.rotation_world_from_body,
+            test_case.position_world_from_body,
+            test_case.landmark_world,
+            test_case.camera);
+        ASSERT_TRUE(prediction) << prediction.error();
+        ASSERT_NE(prediction->landmark_camera.z(), 1.0);
+
+        const auto jacobians = make_measurement_jacobian_blocks(
+            *prediction,
+            test_case.rotation_world_from_body,
+            test_case.camera,
+            kImuErrorStateSize + 3 * 3);
+        ASSERT_TRUE(jacobians) << jacobians.error();
+        EXPECT_EQ(jacobians->landmark_offset, kImuErrorStateSize + 3 * 3);
+
+        const double x = prediction->landmark_camera.x();
+        const double y = prediction->landmark_camera.y();
+        const double z = prediction->landmark_camera.z();
+        Eigen::Matrix<double, 2, 3> projection = Eigen::Matrix<double, 2, 3>::Zero();
+        projection(0, 0) = test_case.camera.intrinsics.x() / z;
+        projection(0, 2) = -test_case.camera.intrinsics.x() * x / (z * z);
+        projection(1, 1) = test_case.camera.intrinsics.y() / z;
+        projection(1, 2) = -test_case.camera.intrinsics.y() * y / (z * z);
+        const auto camera_from_body = camera_from_body_transform(test_case.camera);
+        ASSERT_TRUE(camera_from_body) << camera_from_body.error();
+        const Eigen::Matrix<double, 2, 3> expected_position = projection
+            * camera_from_body->block<3, 3>(0, 0)
+            * -test_case.rotation_world_from_body.inverse().matrix();
+        EXPECT_TRUE(jacobians->pose.leftCols<3>().isApprox(expected_position, kTolerance));
+        EXPECT_LT((jacobians->landmark - finite_difference_landmark(
+            test_case.rotation_world_from_body,
+            test_case.position_world_from_body,
+            test_case.landmark_world,
+            test_case.camera)).norm(), 2e-4);
+        EXPECT_LT((jacobians->pose.leftCols<3>() - finite_difference_position(
+            test_case.rotation_world_from_body,
+            test_case.position_world_from_body,
+            test_case.landmark_world,
+            test_case.camera)).norm(), 2e-4);
+        EXPECT_LT((jacobians->pose.rightCols<3>() - finite_difference_orientation(
+            test_case.rotation_world_from_body,
+            test_case.position_world_from_body,
+            test_case.landmark_world,
+            test_case.camera)).norm(), 2e-4);
+    }
+}
+
+TEST(MeasurementModelTest, MeasurementJacobianIdentityCaseAndInvalidInputs) {
+    const CameraCalibration camera = make_camera();
+    const Eigen::Vector3d landmark_world{2.0, -3.0, 3.0};
+    const auto prediction = predict_pinhole_pixel(
+        Sophus::SO3d{}, Eigen::Vector3d::Zero(), landmark_world, camera);
+    ASSERT_TRUE(prediction) << prediction.error();
+    const auto jacobians = make_measurement_jacobian_blocks(
+        *prediction, Sophus::SO3d{}, camera, kImuErrorStateSize);
+    ASSERT_TRUE(jacobians) << jacobians.error();
+
+    Eigen::Matrix<double, 2, 3> expected_projection;
+    expected_projection << 500.0 / 3.0, 0.0, -1000.0 / 9.0,
+        0.0, 200.0, 200.0;
+    EXPECT_TRUE(jacobians->landmark.isApprox(expected_projection, kTolerance));
+    EXPECT_TRUE(jacobians->pose.leftCols<3>().isApprox(-expected_projection, kTolerance));
+
+    const auto invalid_offset = make_measurement_jacobian_blocks(
+        *prediction, Sophus::SO3d{}, camera, kImuErrorStateSize + 1);
+    EXPECT_FALSE(invalid_offset);
+    EXPECT_NE(invalid_offset.error().find("landmark_offset"), std::string::npos);
 }
 
 TEST(MeasurementModelTest, ProjectionIsInvariantAlongTheSameRay) {

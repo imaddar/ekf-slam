@@ -7,6 +7,7 @@ targeting autonomy/algorithms roles.
 
 Full project plan and phase breakdown: [scope.md](scope.md).
 System design and module layout: [ARCHITECTURE.md](ARCHITECTURE.md).
+Mathematical conventions: [CONVENTIONS.md](CONVENTIONS.md).
 
 ## Current state
 
@@ -43,7 +44,7 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-87 tests across `parser_tests`, `state_tests`, `slam_state_tests`,
+90 tests across `parser_tests`, `state_tests`, `slam_state_tests`,
 `stereo_geometry_tests`, `measurement_model_tests`, `propagation_tests`, and
 `synthetic_tests`, plus triangulation, augmentation, and integration test
 binaries. No CI config and no standalone benchmark binary yet — metrics are
@@ -52,6 +53,13 @@ asserted inside the test suite and recorded in `BENCHMARKS.md`.
 
 ## Conventions to follow
 
+- **Mathematical conventions.** Before changing estimator math, frame
+  transforms, Jacobians, covariance propagation, triangulation, augmentation,
+  measurement updates, marginalization, or tests that encode any of those, read
+  and follow `CONVENTIONS.md`. Work must adhere strictly to those conventions to
+  avoid silent frame/sign/order bugs. If new code and the convention document do
+  not align, update whichever side is wrong in the same change while minimizing
+  the total surface area changed.
 - **Error handling.** No panics in library code. Every fallible operation
   returns `ParseResult<T>` with a message naming the field, line number, and
   what was expected vs. what was found. This matches the hard-fail-by-default

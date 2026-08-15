@@ -10,11 +10,12 @@ yet) see [scope.md](scope.md).
 ```
 CMakeLists.txt      C++ build and GoogleTest test configuration
 BENCHMARKS.md       Benchmark and metric registry
+CONVENTIONS.md      Mathematical convention reference for estimator code
 parser.hpp          Public C++ parser API declaration
 parser.cpp          Top-level dataset loading orchestration
 parser_csv.hpp/cpp  Internal CSV parsing and stereo frame pairing
 parser_yaml.hpp/cpp Internal EuRoC calibration YAML parsing
-measurement_model.hpp/cpp Pure pinhole pixel prediction h(.) for one landmark
+measurement_model.hpp/cpp Pure pinhole prediction h(.) and sparse Jacobian blocks
 propagation.hpp/cpp Public IMU nominal-state propagation
 state.hpp           Public nominal ESEKF state and covariance types
 slam_state.hpp/cpp  Public SLAM state, registry, and covariance storage
@@ -43,7 +44,7 @@ There is a public nominal ESEKF state layout, IMU-only state covariance type,
 preallocated SLAM state storage container with metric XYZ landmark registry and
 batch compaction, IMU nominal-state and covariance propagation, joint SLAM
 covariance propagation, metric XYZ stereo geometry, a pure pinhole camera
-measurement model for predicting where one world landmark should project,
+measurement model and sparse analytical Jacobian blocks for one world landmark,
 rectified stereo triangulation uncertainty, analytical augmentation Jacobians,
 and metric XYZ landmark covariance augmentation. Camera measurement updates,
 feature tracking, raw EuRoC stereo rectification/undistortion, and filter
@@ -101,6 +102,10 @@ normalized pinhole coordinates, and pixel coordinates. It does not take
 `NominalState`, velocity, biases, covariance, process-noise terms, or landmark
 storage; landmark iteration and state slicing belong to the future update step.
 Visibility gating (`Z <= 0`) and image-bound checks are also outside this API.
+`MeasurementJacobianBlocks` supplies a compact `2x6` pose block ordered
+`[delta p_W, delta theta_B]`, a `2x3` metric-XYZ landmark block, and the
+resolved landmark state-column offset. The future update inserts the pose halves
+at robot columns `0..2` and `6..8`, avoiding a dense mostly-zero Jacobian.
 
 `augmentation_jacobians.hpp/cpp` defines the analytical metric XYZ augmentation
 derivatives. It uses the right/local orientation convention and the established
@@ -248,6 +253,8 @@ agreement between injected noise and the calibration densities.
 - `predict_pinhole_pixel(R_WB, p_WB, landmark_world, camera)` — public. Applies
   the pure pinhole measurement model for one landmark and one camera without
   visibility gating, noise, covariance access, or update-step state slicing.
+- `make_measurement_jacobian_blocks(prediction, R_WB, camera, landmark_offset)` —
+  public. Returns compact pose and metric-XYZ landmark pixel-Jacobian blocks.
 - `make_augmentation_jacobians(robot, camera, point_camera)` — public. Returns
   the `3x15` robot Jacobian and `3x3` camera-point Jacobian for metric XYZ
   initialization.
@@ -538,6 +545,11 @@ work.
   coefficients are fixed calibration constants, so carrying them through
   `d h / d x` would add complexity without adding estimated state information.
   The current implementation therefore models pinhole projection only.
+- **Jacobians remain sparse and explicit about layout.** The `2x6` compact pose
+  block is ordered `[delta p_W, delta theta_B]`; the future update places its
+  halves at non-contiguous state columns `0..2` and `6..8`. A resolved landmark
+  offset identifies the sole active `2x3` landmark block, leaving every other
+  robot and landmark block structurally zero without allocating a dense matrix.
 
 ### Synthetic data harness
 
@@ -701,7 +713,7 @@ behavior yet.
 
 ## Tests
 
-87 GoogleTest cases across eleven binaries, run through CTest:
+90 GoogleTest cases across eleven binaries, run through CTest:
 
 - `tests/parser_test.cpp` — inline YAML/CSV fixtures plus a smoke test against
   `datasets/machine_hall/MH_01_easy`.
@@ -715,9 +727,9 @@ behavior yet.
 - `tests/stereo_geometry_test.cpp` — metric XYZ frame-map identity,
   round-trip, nonzero-extrinsic, and rigid-transform validation cases.
 - `tests/measurement_model_test.cpp` — pure pinhole projection, inverse-pose
-  convention, per-camera baseline behavior, the no-visibility-gating
-  contract for `h(.)`, and agreement with the synthetic harness on noiseless
-  pixels.
+  convention, per-camera baseline behavior, analytical Jacobians checked with
+  central finite differences across five pose/extrinsic cases, the
+  no-visibility-gating contract for `h(.)`, and noiseless synthetic agreement.
 - `tests/augmentation_jacobians_test.cpp` — analytical metric XYZ Jacobians,
   finite-difference agreement, sparsity, and validation.
 - `tests/triangulation_test.cpp` — rectified stereo reconstruction, covariance
