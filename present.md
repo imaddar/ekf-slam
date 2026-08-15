@@ -5,13 +5,13 @@ problem, approach, implementation, metrics, results, lessons, contribution.
 
 **Status as of 2026-08-14.** Implemented: EuRoC dataset parser, nominal ESEKF
 state, joint covariance propagation, metric XYZ stereo geometry, a synthetic
-ground-truth harness, metric XYZ augmentation Jacobians, anisotropic stereo
-triangulation covariance, metric XYZ state augmentation, and 87 tests. Not implemented: camera
-measurement update, ATE/RPE/NEES
-evaluation, ROS 2, Jetson deployment. Every number below is measured; nothing is
-projected. Keep that boundary explicit when presenting — the strongest thing to
-show right now is *verification methodology on a half-built filter*, not a
-finished SLAM system.
+ground-truth harness, metric XYZ augmentation Jacobians, anisotropic rectified
+stereo triangulation covariance, metric XYZ state augmentation, and 88 tests. Not
+implemented: raw EuRoC stereo undistortion/rectification, camera measurement
+update, ATE/RPE/NEES evaluation, ROS 2, Jetson deployment. Every number below is
+measured; nothing is projected. Keep that boundary explicit when presenting —
+the strongest thing to show right now is *verification methodology on a
+half-built filter*, not a finished SLAM system.
 
 ---
 

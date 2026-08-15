@@ -6,8 +6,10 @@
 
 #include <Eigen/Core>
 
-// Triangulates one rectified stereo observation and inserts its metric XYZ
-// world position and covariance into the preallocated joint state.
+// Triangulates one already-rectified stereo observation and inserts its metric
+// XYZ world position and covariance into the preallocated joint state. Raw EuRoC
+// camera observations need a rectification layer before this API can consume
+// them.
 ParseResult<void> augment_landmark(
     SlamState& state,
     LandmarkId id,

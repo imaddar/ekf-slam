@@ -49,7 +49,8 @@ Single-threaded, runs against recorded EuRoC sequences. Deliverable: ATE/RPE/NEE
 
 #### Week 6–8: Camera Measurement Update
 - [ ] Feature detection and tracking (decide: KLT vs descriptor-based)
-- [x] Metric XYZ landmark initialization from stereo triangulation
+- [x] Metric XYZ landmark initialization from rectified stereo triangulation
+- [ ] Raw EuRoC stereo undistortion/rectification before landmark initialization
 - [ ] EKF update step
 - [ ] Landmark marginalization
 

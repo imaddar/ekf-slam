@@ -58,7 +58,9 @@ ParseResult<StereoTriangulation> triangulate_stereo(
         return std::unexpected(valid.error());
     }
     if (!cam0.intrinsics.isApprox(cam1.intrinsics, kRectificationTolerance)) {
-        return std::unexpected("stereo_rig: expected matching pinhole intrinsics");
+        return std::unexpected(
+            "stereo_rig: expected matching rectified pinhole intrinsics; "
+            "raw EuRoC camera calibration must be rectified before triangulation");
     }
 
     const auto cam0_body = body_from_camera_transform(cam0, "cam0");

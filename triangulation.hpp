@@ -14,7 +14,9 @@ struct StereoTriangulation {
 
 // Pixel ordering is [u0, v0, u1, v1]. The returned point and covariance are
 // expressed in camera 0's frame. This is the metric XYZ model used by
-// augmentation; it currently requires a rectified horizontal stereo rig.
+// augmentation; it requires already-rectified, distortion-free stereo pixels and
+// rectified pseudo-calibrations. Raw EuRoC cam0/cam1 calibration does not satisfy
+// this contract until an undistortion/rectification step is added.
 ParseResult<StereoTriangulation> triangulate_stereo(
     const Eigen::Vector2d& pixel_cam0,
     const Eigen::Vector2d& pixel_cam1,

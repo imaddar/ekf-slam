@@ -127,3 +127,20 @@ TEST(TriangulationTest, RejectsDegenerateDisparityAndNonRectifiedRigs) {
     EXPECT_FALSE(non_rectified);
     EXPECT_NE(non_rectified.error().find("shared orientation"), std::string::npos);
 }
+
+TEST(TriangulationTest, RejectsRawEurocLikeCalibrationUntilRectified) {
+    const CameraCalibration cam0 = make_camera(Eigen::Vector3d::Zero());
+    CameraCalibration raw_like_cam1 = make_camera(Eigen::Vector3d{0.2, 0.0, 0.0});
+    raw_like_cam1.intrinsics = Eigen::Vector4d{457.587, 456.134, 379.999, 255.238};
+
+    const auto result = triangulate_stereo(
+        Eigen::Vector2d{340.0, 240.0},
+        Eigen::Vector2d{320.0, 240.0},
+        cam0,
+        raw_like_cam1,
+        0.01 * Eigen::Matrix4d::Identity());
+
+    ASSERT_FALSE(result);
+    EXPECT_NE(result.error().find("rectified"), std::string::npos);
+    EXPECT_NE(result.error().find("EuRoC"), std::string::npos);
+}

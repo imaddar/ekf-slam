@@ -42,13 +42,13 @@ tests/slam_integration_test.cpp End-to-end SLAM state integration test
 There is a public nominal ESEKF state layout, IMU-only state covariance type,
 preallocated SLAM state storage container with metric XYZ landmark registry and
 batch compaction, IMU nominal-state and covariance propagation, joint SLAM
-covariance propagation, metric XYZ stereo geometry, and a pure pinhole camera
-measurement model for predicting where one world landmark should project. Metric
-measurement model, rectified stereo triangulation uncertainty, analytical
-augmentation Jacobians, and metric XYZ landmark covariance augmentation. Camera
-measurement updates, feature tracking, and filter marginalization do not exist
-yet. A synthetic data harness exists for controlled pre-EuRoC validation of
-propagation and SLAM-state behavior.
+covariance propagation, metric XYZ stereo geometry, a pure pinhole camera
+measurement model for predicting where one world landmark should project,
+rectified stereo triangulation uncertainty, analytical augmentation Jacobians,
+and metric XYZ landmark covariance augmentation. Camera measurement updates,
+feature tracking, raw EuRoC stereo rectification/undistortion, and filter
+marginalization do not exist yet. A synthetic data harness exists for controlled
+pre-EuRoC validation of propagation and SLAM-state behavior.
 
 ## C++ root skeleton
 
@@ -252,8 +252,9 @@ agreement between injected noise and the calibration densities.
   the `3x15` robot Jacobian and `3x3` camera-point Jacobian for metric XYZ
   initialization.
 - `triangulate_stereo(pixel_cam0, pixel_cam1, cam0, cam1, pixel_covariance)` —
-  public. Validates a rectified horizontal rig and returns a camera-0 metric XYZ
-  point, its `3x4` pixel Jacobian, and anisotropic `R_tri`.
+  public. Validates an already-rectified horizontal rig and returns a camera-0
+  metric XYZ point, its `3x4` pixel Jacobian, and anisotropic `R_tri`. Raw EuRoC
+  cam0/cam1 calibration must first be converted into rectified pseudo-cameras.
 - `augment_landmark(state, id, pixel_cam0, pixel_cam1, cam0, cam1,
   pixel_covariance)` — public. Computes the world landmark and complete new
   covariance column, then inserts it without changing preallocated storage.
@@ -458,7 +459,9 @@ work.
 - **Anisotropic rectified-stereo uncertainty.** Triangulation uses the analytic
   pixel Jacobian `R_tri = J_tri Sigma_pixels J_tri^T` rather than an isotropic
   placeholder. The implementation rejects near-zero disparity and non-rectified
-  rigs because depth uncertainty grows quadratically with range.
+  rigs because depth uncertainty grows quadratically with range. This is a
+  rectified-input contract, not raw EuRoC camera support; the parsed EuRoC
+  intrinsics and extrinsics still need an undistortion/rectification adapter.
 - **Augmentation exploits Jacobian sparsity.** The new covariance column uses
   only the position and orientation columns of `P_rr` implied by `J_r`; it does
   not form a dense augmented transition for each landmark birth.
