@@ -19,6 +19,7 @@ add_library(ekf_slam_parser
     parser_csv.cpp
     parser.cpp
     parser_yaml.cpp
+    augmentation_jacobians.cpp
     measurement_model.cpp
     propagation.cpp
     slam_state.cpp
@@ -149,6 +150,25 @@ if(BUILD_TESTING)
     )
 
     gtest_discover_tests(measurement_model_tests)
+
+    add_executable(augmentation_jacobians_tests
+        tests/augmentation_jacobians_test.cpp
+    )
+
+    target_link_libraries(augmentation_jacobians_tests
+        PRIVATE
+            ekf_slam_parser
+            GTest::gtest_main
+    )
+
+    target_compile_options(augmentation_jacobians_tests
+        PRIVATE
+            -Wall
+            -Wextra
+            -Werror
+    )
+
+    gtest_discover_tests(augmentation_jacobians_tests)
 
     add_executable(propagation_tests
         tests/propagation_test.cpp

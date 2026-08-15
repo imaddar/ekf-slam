@@ -42,8 +42,9 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-54 tests across `parser_tests`, `state_tests`, `slam_state_tests`,
-`propagation_tests`, and `synthetic_tests`. No CI config and no standalone benchmark binary yet — metrics
+78 tests across `parser_tests`, `state_tests`, `slam_state_tests`,
+`stereo_geometry_tests`, `measurement_model_tests`, `propagation_tests`, and
+`synthetic_tests`. No CI config and no standalone benchmark binary yet — metrics
 are asserted inside the test suite and recorded in `BENCHMARKS.md`.
 `parse_dataset(...)` loads a EuRoC sequence into the current `Dataset` shape.
 
@@ -85,6 +86,7 @@ are asserted inside the test suite and recorded in `BENCHMARKS.md`.
   corresponding checkbox in that file as part of the change.
 - This project has no `AGENTS.md` distinct from this file — `AGENTS.md` is a
   symlink to `CLAUDE.md` so both names resolve to the same instructions.
+- Make sure to adhere strictly to the DESIGN DECISIONS section in ARCHITECTURE.md where necessary.
 
 
 ## Project Presentation

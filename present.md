@@ -5,7 +5,7 @@ problem, approach, implementation, metrics, results, lessons, contribution.
 
 **Status as of 2026-08-14.** Implemented: EuRoC dataset parser, nominal ESEKF
 state, joint covariance propagation, metric XYZ stereo geometry, a synthetic
-ground-truth harness, and 72 tests. Not implemented: state augmentation, camera
+ground-truth harness, metric XYZ augmentation Jacobians, and 78 tests. Not implemented: state augmentation, camera
 measurement update, ATE/RPE/NEES
 evaluation, ROS 2, Jetson deployment. Every number below is measured; nothing is
 projected. Keep that boundary explicit when presenting — the strongest thing to

@@ -19,6 +19,7 @@ propagation.hpp/cpp Public IMU nominal-state propagation
 state.hpp           Public nominal ESEKF state and covariance types
 slam_state.hpp/cpp  Public SLAM state, registry, and covariance storage
 stereo_geometry.hpp/cpp Camera/body/world metric XYZ frame transforms
+augmentation_jacobians.hpp/cpp Metric XYZ augmentation derivatives
 synthetic.hpp/cpp   Public synthetic analytic trajectory and IMU generator
 types.hpp           C++ parser output type declarations
 roadmap.md          Planned parser API direction
@@ -37,9 +38,9 @@ There is a public nominal ESEKF state layout, IMU-only state covariance type,
 preallocated SLAM state storage container with metric XYZ landmark registry and
 batch compaction, IMU nominal-state and covariance propagation, joint SLAM
 covariance propagation, metric XYZ stereo geometry, and a pure pinhole camera
-measurement model for predicting where one world landmark should project. The
-full error-state struct, state augmentation, and measurement update do not exist
-yet. A synthetic data harness exists for controlled pre-EuRoC validation of
+measurement model for predicting where one world landmark should project. Metric
+XYZ augmentation Jacobians are implemented, but the full state augmentation and
+measurement update do not exist yet. A synthetic data harness exists for controlled pre-EuRoC validation of
 propagation behavior.
 
 ## C++ root skeleton
@@ -91,6 +92,11 @@ normalized pinhole coordinates, and pixel coordinates. It does not take
 `NominalState`, velocity, biases, covariance, process-noise terms, or landmark
 storage; landmark iteration and state slicing belong to the future update step.
 Visibility gating (`Z <= 0`) and image-bound checks are also outside this API.
+
+`augmentation_jacobians.hpp/cpp` defines the analytical metric XYZ augmentation
+derivatives. It uses the right/local orientation convention and the established
+propagation ordering `[position, velocity, orientation, accelerometer bias,
+gyroscope bias]`; it does not insert landmarks or mutate covariance storage.
 
 `propagation.hpp` exposes `PropagationResult` and `propagate(...)`, which
 returns `ParseResult<PropagationResult>`. The propagation function takes a
@@ -233,6 +239,9 @@ agreement between injected noise and the calibration densities.
 - `predict_pinhole_pixel(R_WB, p_WB, landmark_world, camera)` — public. Applies
   the pure pinhole measurement model for one landmark and one camera without
   visibility gating, noise, covariance access, or update-step state slicing.
+- `make_augmentation_jacobians(robot, camera, point_camera)` — public. Returns
+  the `3x15` robot Jacobian and `3x3` camera-point Jacobian for metric XYZ
+  initialization.
 
 Lower-level YAML, CSV, and stereo-pair parsing functions are private
 implementation details in `parser_yaml.cpp` and `parser_csv.cpp`. Planned future
@@ -667,7 +676,7 @@ behavior yet.
 
 ## Tests
 
-76 GoogleTest cases across seven binaries, run through CTest:
+78 GoogleTest cases across eight binaries, run through CTest:
 
 - `tests/parser_test.cpp` — inline YAML/CSV fixtures plus a smoke test against
   `datasets/machine_hall/MH_01_easy`.
@@ -684,6 +693,8 @@ behavior yet.
   convention, per-camera baseline behavior, the no-visibility-gating
   contract for `h(.)`, and agreement with the synthetic harness on noiseless
   pixels.
+- `tests/augmentation_jacobians_test.cpp` — analytical metric XYZ Jacobians,
+  finite-difference agreement, sparsity, and validation.
 - `tests/synthetic_test.cpp` — the synthetic harness, and propagation against
   analytic truth up to the headline fully excited case.
 

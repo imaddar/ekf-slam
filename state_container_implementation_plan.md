@@ -197,6 +197,32 @@ covariance propagation.
 
 Extend prediction to the joint covariance.
 
+### Work
+
+- **Land the cross-covariance accessors first, before propagation math.** The
+  container currently exposes `robot_covariance()` (15x15), `landmark_block(i)`
+  (one diagonal `3x3`), and `active_covariance()` (everything). Nothing reaches
+  the `15 x 3N` robot-landmark strip that `P_rl` propagation needs, so the first
+  `Phi * P_rl` line would either add an accessor or index into
+  `active_covariance()` with hand-computed offsets — the arithmetic Step 2
+  exists to prevent. Add:
+
+  ```text
+  robot_landmark_covariance()      15  x 3N
+  landmark_landmark_covariance()   3N  x 3N
+  ```
+
+  Both are runtime-sized views of the active region bounded by
+  `active_landmarks_`; neither adds storage. Landing them first keeps the first
+  propagation failure unambiguous between the transition math and the indexing,
+  the same reason `landmark_block` led Step 2.
+- Keep the symmetric `P_rl`/`P_lr` write inside the container with a setter, so
+  propagation and later augmentation cannot update one strip without the other.
+- Gate 3's `P_ll` bit-identity check needs the full landmark-landmark
+  submatrix, including `i != j` cross blocks. `landmark_block(i)` returns only
+  diagonals, so without the second accessor the test reaches through
+  `SlamStateTestAccess` or recomputes offsets itself.
+
 For each IMU step:
 
 - Propagate `P_rr` using the existing robot transition.
@@ -206,6 +232,9 @@ For each IMU step:
 
 ### Gate 3
 
+- Both cross-covariance accessors exist, are bounded by the active landmark
+  count, and are the only path propagation uses to reach those blocks.
+
 - `P_ll` is bit-identical after prediction.
 - `P_rl` matches an explicit augmented-matrix reference implementation.
 - `P_rr` matches the existing IMU-only result.
@@ -214,6 +243,12 @@ For each IMU step:
   check would mask a problem. Assert the stronger property where it holds.
 - The full joint covariance remains positive semidefinite.
 - `N = 0` remains numerically identical to the old propagation path.
+- The 200 Hz propagation path uses fixed-size per-landmark temporaries and does
+  not allocate a dynamic `15 x 3N` covariance product.
+
+Gate 3 passes with the active covariance accessors, shared robot transition,
+joint block propagation, and dedicated reference/PSD tests. The next stage is
+Step 4: stereo forward-map geometry.
 
 ## Step 4: Stereo Forward Map
 
@@ -232,6 +267,10 @@ Keep parameterization-specific logic behind a narrow interface.
 - Nonzero translation and rotation extrinsics pass hand-computed tests.
 - Extrinsics come from `CameraCalibration`, never hardcoded.
 
+Gate 4 passes with the validated metric XYZ frame maps and identity,
+round-trip, nonzero-extrinsic, and calibration-driven tests. The next stage is
+Step 5: augmentation Jacobians.
+
 ## Step 5: Augmentation Jacobians
 
 Implement analytical Jacobians for metric XYZ augmentation. Build the
@@ -247,6 +286,70 @@ Required structure:
 - Velocity and bias blocks are zero.
 - `J_lC` is derived directly from the forward map.
 
+### Derivation for Augmentation Jacobians
+### Derivation
+
+Forward map:
+
+$$l^W = R_{WB}\left(R_{BS}\,l^C + p_{BS}\right) + p_{WB}$$
+
+Define the landmark in body coordinates:
+
+$$l^B \triangleq R_{BS}\,l^C + p_{BS}$$
+
+so that $l^W = R_{WB}\,l^B + p_{WB}$.
+
+#### Position block
+
+$p_{WB}$ enters additively and appears nowhere else:
+
+$$\frac{\partial l^W}{\partial \delta p} = I_{3\times3}$$
+
+#### Orientation block (right/local)
+
+Perturb the nominal rotation on the right:
+
+$$R_{WB} = \hat{R}_{WB}\,\mathrm{Exp}(\delta\theta) \approx \hat{R}_{WB}\left(I + [\delta\theta]_\times\right)$$
+
+Substitute and expand:
+
+$$l^W \approx \hat{R}_{WB}\left(I + [\delta\theta]_\times\right) l^B + \hat{p}_{WB} + \delta p$$
+$$= \underbrace{\hat{R}_{WB}\,l^B + \hat{p}_{WB}}_{\text{nominal}} \;+\; \hat{R}_{WB}[\delta\theta]_\times l^B \;+\; \delta p$$
+
+Dropping the zeroth-order term leaves the first-order error:
+
+$$\delta l^W = \delta p + \hat{R}_{WB}[\delta\theta]_\times\, l^B$$
+
+$\delta\theta$ is trapped in the middle, so this is not yet a Jacobian. Apply
+$[a]_\times b = -[b]_\times a$:
+
+$$\hat{R}_{WB}[\delta\theta]_\times l^B = -\hat{R}_{WB}[l^B]_\times \delta\theta$$
+
+giving
+
+$$\frac{\partial l^W}{\partial \delta\theta} = -\hat{R}_{WB}\,[l^B]_\times$$
+
+Note the skew-symmetrized vector is $l^B$ — not $l^C$ (wrong frame, before the
+extrinsic) and not $l^W$ (after the translation, which the rotation does not
+act on).
+
+#### Zero blocks
+
+$\delta v$, $\delta b_g$, $\delta b_a$ do not appear in the forward map:
+
+$$\frac{\partial l^W}{\partial \delta v} = \frac{\partial l^W}{\partial \delta b_g} = \frac{\partial l^W}{\partial \delta b_a} = 0_{3\times3}$$
+
+#### Assembled J_r (3 × 15)
+
+The implemented propagation ordering is $[\delta p,\ \delta v,\ \delta\theta,\ \delta b_a,\ \delta b_g]$:
+
+$$J_r = \begin{bmatrix} I_{3} & 0_{3} & -\hat{R}_{WB}[l^B]_\times & 0_{3} & 0_{3} \end{bmatrix}$$
+
+#### J_lC (3 × 3)
+
+Read directly off the forward map — the composition acting on $l^C$:
+
+$$J_{l^C} = \frac{\partial l^W}{\partial l^C} = R_{WB}\,R_{BS}$$
 ### Gate 5
 
 - Analytical and numerical `J_r` agree to approximately `1e-6`.
@@ -254,6 +357,10 @@ Required structure:
 - Position and zero blocks are structurally exact.
 - Orientation perturbations produce the expected skew structure.
 - The convention is verified against `propagation.cpp`.
+
+Gate 5 passes with analytical derivatives, finite-difference checks, exact
+sparsity checks, and the propagation ordering correction above. The next stage
+is Step 6: triangulation uncertainty.
 
 ## Step 6: Triangulation Uncertainty
 
@@ -304,6 +411,20 @@ Maintain covariance symmetry when writing the new blocks.
 This runs on every landmark birth. The naive dense form is the obvious one to
 write and should be explicitly avoided.
 
+### Work — carried from the Step 2 review
+
+- **Stop `add_landmark` from overwriting the caller's `P_ll`.** The column and
+  row writes overlap on the new landmark's own `3x3` corner, and the row write
+  lands second, so the stored block is the transpose of what the caller
+  supplied. Harmless for a symmetric input, which augmentation produces, but the
+  result depends on statement order and a grossly asymmetric block is accepted
+  silently. Write only the off-diagonal strip in the second write so the corner
+  has one writer.
+- **Take the covariance column by `Eigen::Ref<const Eigen::MatrixXd>`.** The
+  current `const Eigen::MatrixXd&` materializes a temporary when bound to the
+  `P_rr J_r^T` expression, adding a heap allocation to every landmark birth —
+  the one path this step exists to keep cheap.
+
 ### Gate 7
 
 - `P_rl` is nonzero after augmentation.
@@ -324,6 +445,15 @@ write and should be explicitly avoided.
 ## Step 8: End-to-End Synthetic Integration
 
 Connect propagation, registry, augmentation, and removal.
+
+### Work — carried from the Step 2 review
+
+- **Narrow compaction's column phase to survivor rows.** It currently walks all
+  `active_landmarks_` rows when only survivor rows are read back by the row
+  phase; the rest are either overwritten there or NaN-poisoned. Restricting the
+  loop to `survivor_indices` drops the block-copy count from `k*N` to `k*k`.
+  Do this before removal cost is measured, since these numbers land in
+  `BENCHMARKS.md`.
 
 ### Gate 8
 
@@ -371,5 +501,10 @@ Note that the dominant cost in either case is the covariance update
 
 ---
 
-Gate 1a passed in commits `a807817` and `56f4b03`. Step 2 now implements the
-landmark registry and batch compaction. Step 3 is the next gated stage.
+Gate 1a passed in commits `a807817` and `56f4b03`. Gate 2 passed at `ad3da23`,
+which replaced zero-filled landmark covariance with a caller-supplied column and
+made compaction in-place. Step 3 is the next gated stage, and begins with the
+cross-covariance accessors rather than the transition math. Two Step 2 review
+items were deliberately deferred to the steps that already touch that code:
+the `add_landmark` corner-write ordering and its `Eigen::Ref` signature to
+Step 7, and compaction's column-phase row bound to Step 8.
