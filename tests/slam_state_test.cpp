@@ -322,6 +322,22 @@ TEST(SlamStateTest, RequiresFiniteCompleteLandmarkCovarianceColumn) {
     EXPECT_EQ(state.active_landmarks(), 0U);
 }
 
+TEST(SlamStateTest, AddLandmarkPreservesCallerSuppliedCovarianceCorner) {
+    const auto result = make_state(1);
+
+    ASSERT_TRUE(result) << result.error();
+    SlamState state = std::move(*result);
+    Eigen::MatrixXd covariance_column = make_landmark_covariance_column(state, 100.0);
+    covariance_column.bottomRows<kLandmarkDim>() =
+        (Eigen::Matrix3d{} << 1.0, 2.0, 3.0,
+            4.0, 5.0, 6.0,
+            7.0, 8.0, 9.0)
+            .finished();
+
+    ASSERT_TRUE(state.add_landmark(1, Eigen::Vector3d{1.0, 2.0, 3.0}, covariance_column));
+    EXPECT_TRUE(state.landmark_block(0)->isApprox(covariance_column.bottomRows<kLandmarkDim>(), 0.0));
+}
+
 TEST(SlamStateTest, AddRemoveAddCompactsDeterministically) {
     const auto result = make_state(2);
 

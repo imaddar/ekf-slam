@@ -5,7 +5,8 @@ problem, approach, implementation, metrics, results, lessons, contribution.
 
 **Status as of 2026-08-14.** Implemented: EuRoC dataset parser, nominal ESEKF
 state, joint covariance propagation, metric XYZ stereo geometry, a synthetic
-ground-truth harness, metric XYZ augmentation Jacobians, and 78 tests. Not implemented: state augmentation, camera
+ground-truth harness, metric XYZ augmentation Jacobians, anisotropic stereo
+triangulation covariance, metric XYZ state augmentation, and 87 tests. Not implemented: camera
 measurement update, ATE/RPE/NEES
 evaluation, ROS 2, Jetson deployment. Every number below is measured; nothing is
 projected. Keep that boundary explicit when presenting — the strongest thing to
@@ -164,7 +165,7 @@ The container now owns the bookkeeping needed before covariance math: metric XYZ
 landmark positions, an external-ID registry, capacity-bounded covariance blocks,
 and batch compaction for removal. Joint covariance propagation now updates
 `P_rr` and `P_rl` with the shared robot transition while leaving `P_ll`
-unchanged. State augmentation remains a separate stage. `T_BS` is explicitly
+unchanged. Camera measurement update remains a separate stage. `T_BS` is explicitly
 body-from-camera, matching the existing synthetic projection convention.
 
 ### The propagation step
@@ -428,8 +429,7 @@ on the build type.
 
 **Immediate (finishes Phase 1):**
 
-- Camera measurement update: feature tracking, metric XYZ landmark
-  initialization from stereo triangulation, EKF update, marginalization.
+- Camera measurement update: feature tracking, EKF update, marginalization.
 - ATE / RPE / NEES evaluation across MH_01–V2_03. NEES is the one that closes
   the loop on the covariance work above — the Monte Carlo test proves the
   propagated covariance is self-consistent; NEES proves it is consistent with

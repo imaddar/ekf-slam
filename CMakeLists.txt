@@ -20,10 +20,12 @@ add_library(ekf_slam_parser
     parser.cpp
     parser_yaml.cpp
     augmentation_jacobians.cpp
+    landmark_augmentation.cpp
     measurement_model.cpp
     propagation.cpp
     slam_state.cpp
     stereo_geometry.cpp
+    triangulation.cpp
     synthetic.cpp
 )
 
@@ -169,6 +171,63 @@ if(BUILD_TESTING)
     )
 
     gtest_discover_tests(augmentation_jacobians_tests)
+
+    add_executable(triangulation_tests
+        tests/triangulation_test.cpp
+    )
+
+    target_link_libraries(triangulation_tests
+        PRIVATE
+            ekf_slam_parser
+            GTest::gtest_main
+    )
+
+    target_compile_options(triangulation_tests
+        PRIVATE
+            -Wall
+            -Wextra
+            -Werror
+    )
+
+    gtest_discover_tests(triangulation_tests)
+
+    add_executable(landmark_augmentation_tests
+        tests/landmark_augmentation_test.cpp
+    )
+
+    target_link_libraries(landmark_augmentation_tests
+        PRIVATE
+            ekf_slam_parser
+            GTest::gtest_main
+    )
+
+    target_compile_options(landmark_augmentation_tests
+        PRIVATE
+            -Wall
+            -Wextra
+            -Werror
+    )
+
+    gtest_discover_tests(landmark_augmentation_tests)
+
+    add_executable(slam_integration_tests
+        tests/slam_integration_test.cpp
+    )
+
+    target_link_libraries(slam_integration_tests
+        PRIVATE
+            ekf_slam_parser
+            GTest::gtest_main
+    )
+
+    target_compile_options(slam_integration_tests
+        PRIVATE
+            -Wall
+            -Wextra
+            -Werror
+    )
+
+    gtest_discover_tests(slam_integration_tests)
 
     add_executable(propagation_tests
         tests/propagation_test.cpp

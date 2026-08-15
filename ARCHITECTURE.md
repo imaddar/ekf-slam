@@ -20,6 +20,8 @@ state.hpp           Public nominal ESEKF state and covariance types
 slam_state.hpp/cpp  Public SLAM state, registry, and covariance storage
 stereo_geometry.hpp/cpp Camera/body/world metric XYZ frame transforms
 augmentation_jacobians.hpp/cpp Metric XYZ augmentation derivatives
+triangulation.hpp/cpp    Rectified stereo XYZ triangulation and covariance
+landmark_augmentation.hpp/cpp  Stereo landmark insertion and covariance augmentation
 synthetic.hpp/cpp   Public synthetic analytic trajectory and IMU generator
 types.hpp           C++ parser output type declarations
 roadmap.md          Planned parser API direction
@@ -32,6 +34,9 @@ tests/state_test.cpp   C++ state-header compile tests
 tests/slam_state_test.cpp  SLAM state storage tests
 tests/stereo_geometry_test.cpp Metric XYZ frame-transform tests
 tests/synthetic_test.cpp Synthetic trajectory and IMU propagation tests
+tests/triangulation_test.cpp Stereo triangulation covariance tests
+tests/landmark_augmentation_test.cpp Landmark covariance augmentation tests
+tests/slam_integration_test.cpp End-to-end SLAM state integration test
 ```
 
 There is a public nominal ESEKF state layout, IMU-only state covariance type,
@@ -39,9 +44,11 @@ preallocated SLAM state storage container with metric XYZ landmark registry and
 batch compaction, IMU nominal-state and covariance propagation, joint SLAM
 covariance propagation, metric XYZ stereo geometry, and a pure pinhole camera
 measurement model for predicting where one world landmark should project. Metric
-XYZ augmentation Jacobians are implemented, but the full state augmentation and
-measurement update do not exist yet. A synthetic data harness exists for controlled pre-EuRoC validation of
-propagation behavior.
+measurement model, rectified stereo triangulation uncertainty, analytical
+augmentation Jacobians, and metric XYZ landmark covariance augmentation. Camera
+measurement updates, feature tracking, and filter marginalization do not exist
+yet. A synthetic data harness exists for controlled pre-EuRoC validation of
+propagation and SLAM-state behavior.
 
 ## C++ root skeleton
 
@@ -77,7 +84,9 @@ active slots. Batch removal compacts survivors and rebuilds that registry. The
 active `P_rl` and `P_ll` views are bounded by the active landmark count, and
 `propagate_slam(...)` updates the robot state, `P_rr`, and `P_rl` without
 allocating an augmented transition matrix. `P_ll` remains unchanged during
-prediction; augmentation math does not exist yet.
+prediction. `augment_landmark(...)` composes stereo triangulation, world-frame
+conversion, analytical Jacobians, and the new covariance column before
+inserting the landmark.
 
 `stereo_geometry.hpp/cpp` defines the rigid frame maps used by metric XYZ
 initialization. `CameraCalibration::t_bs` is body-from-camera (`T_BS`), so a
@@ -242,6 +251,12 @@ agreement between injected noise and the calibration densities.
 - `make_augmentation_jacobians(robot, camera, point_camera)` — public. Returns
   the `3x15` robot Jacobian and `3x3` camera-point Jacobian for metric XYZ
   initialization.
+- `triangulate_stereo(pixel_cam0, pixel_cam1, cam0, cam1, pixel_covariance)` —
+  public. Validates a rectified horizontal rig and returns a camera-0 metric XYZ
+  point, its `3x4` pixel Jacobian, and anisotropic `R_tri`.
+- `augment_landmark(state, id, pixel_cam0, pixel_cam1, cam0, cam1,
+  pixel_covariance)` — public. Computes the world landmark and complete new
+  covariance column, then inserts it without changing preallocated storage.
 
 Lower-level YAML, CSV, and stereo-pair parsing functions are private
 implementation details in `parser_yaml.cpp` and `parser_csv.cpp`. Planned future
@@ -384,8 +399,8 @@ Three commitments drive most of the rest:
 ### Landmark-state decisions
 
 These choices are settled design direction for the landmark filter and replace
-earlier inverse-depth planning. The implemented portions are described above;
-augmentation remains future work.
+earlier inverse-depth planning. Full camera measurement updates remain future
+work.
 
 - **Metric XYZ landmarks from stereo triangulation.** Each landmark will add a
   3-dimensional Euclidean position in the world frame. This directly matches the
@@ -440,6 +455,13 @@ augmentation remains future work.
   complete new covariance column, including robot/landmark and existing
   landmark cross-covariances. The container does not invent zero correlations;
   this keeps the active covariance finite without weakening the NaN guard.
+- **Anisotropic rectified-stereo uncertainty.** Triangulation uses the analytic
+  pixel Jacobian `R_tri = J_tri Sigma_pixels J_tri^T` rather than an isotropic
+  placeholder. The implementation rejects near-zero disparity and non-rectified
+  rigs because depth uncertainty grows quadratically with range.
+- **Augmentation exploits Jacobian sparsity.** The new covariance column uses
+  only the position and orientation columns of `P_rr` implied by `J_r`; it does
+  not form a dense augmented transition for each landmark birth.
 - **Batch compaction for removal.** Landmark removal compacts all survivors in
   one in-place compaction operation and rebuilds the registry, using fixed-size block temporaries
   rather than full covariance matrices. A free-list design would keep offsets
@@ -676,7 +698,7 @@ behavior yet.
 
 ## Tests
 
-78 GoogleTest cases across eight binaries, run through CTest:
+87 GoogleTest cases across eleven binaries, run through CTest:
 
 - `tests/parser_test.cpp` — inline YAML/CSV fixtures plus a smoke test against
   `datasets/machine_hall/MH_01_easy`.
@@ -695,6 +717,13 @@ behavior yet.
   pixels.
 - `tests/augmentation_jacobians_test.cpp` — analytical metric XYZ Jacobians,
   finite-difference agreement, sparsity, and validation.
+- `tests/triangulation_test.cpp` — rectified stereo reconstruction, covariance
+  scaling, principal-axis orientation, Monte Carlo agreement, and degeneracy.
+- `tests/landmark_augmentation_test.cpp` — covariance augmentation, dense
+  robot cross-correlation, zero-pose uncertainty, and inherited landmark
+  correlation.
+- `tests/slam_integration_test.cpp` — fully excited propagation, landmark
+  insertion, stable allocation, PSD checks, timing capture, and compaction.
 - `tests/synthetic_test.cpp` — the synthetic harness, and propagation against
   analytic truth up to the headline fully excited case.
 

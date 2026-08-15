@@ -58,7 +58,7 @@ public:
     ParseResult<void> add_landmark(
         LandmarkId id,
         const Eigen::Vector3d& position,
-        const Eigen::MatrixXd& covariance_column);
+        const Eigen::Ref<const Eigen::MatrixXd>& covariance_column);
     ParseResult<int> landmark_offset(LandmarkId id) const;
     ParseResult<Eigen::Vector3d> landmark_position(LandmarkId id) const;
     ParseResult<void> remove_landmarks(std::span<const LandmarkId> ids);

@@ -137,7 +137,7 @@ ParseResult<void> SlamState::apply_robot_transition(const ImuStateCovariance& tr
 ParseResult<void> SlamState::add_landmark(
     LandmarkId id,
     const Eigen::Vector3d& position,
-    const Eigen::MatrixXd& covariance_column) {
+    const Eigen::Ref<const Eigen::MatrixXd>& covariance_column) {
     if (!position.allFinite()) {
         return std::unexpected("landmark_position: expected finite XYZ coordinates");
     }
@@ -173,7 +173,7 @@ ParseResult<void> SlamState::add_landmark(
     const int offset = landmark_offset_for_storage_index(storage_index);
     const int new_active_dim = offset + kLandmarkDim;
     covariance_.block(0, offset, new_active_dim, kLandmarkDim) = covariance_column;
-    covariance_.block(offset, 0, kLandmarkDim, new_active_dim) = covariance_column.transpose();
+    covariance_.block(offset, 0, kLandmarkDim, offset) = covariance_column.topRows(offset).transpose();
     storage_index_to_id_[storage_index] = id;
     ++active_landmarks_;
     return {};
@@ -249,7 +249,7 @@ ParseResult<void> SlamState::remove_landmarks(std::span<const LandmarkId> ids) {
             const Eigen::Matrix<double, kRobotDim, kLandmarkDim> robot_cross_covariance =
                 covariance_.block<kRobotDim, kLandmarkDim>(0, old_offset);
             covariance_.block<kRobotDim, kLandmarkDim>(0, new_offset) = robot_cross_covariance;
-            for (std::size_t row = 0; row < active_landmarks_; ++row) {
+            for (const std::size_t row : survivor_indices) {
                 const int row_offset = landmark_offset_for_storage_index(row);
                 const Eigen::Matrix3d landmark_covariance =
                     covariance_.block<kLandmarkDim, kLandmarkDim>(row_offset, old_offset);

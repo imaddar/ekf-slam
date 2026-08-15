@@ -29,6 +29,9 @@ is measured, why it matters, and where the value comes from.
 | Seeded IMU noise reproducibility | `tests/synthetic_test.cpp` | Explicit IMU noise seed | Same seed reproduces samples; noise differs from noiseless output | Passing |
 | Injected noise vs. calibration | `tests/synthetic_test.cpp` | 200 Hz, 100 s, densities `0.01` and `0.002` | Residual stddev within 5% of `density * sqrt(rate)` | Passing |
 | Seeded pixel noise reproducibility | `tests/synthetic_test.cpp` | Explicit pixel noise seed | Same seed reproduces observations; noise differs from noiseless output | Passing |
+| Stereo triangulation covariance | `tests/triangulation_test.cpp` | 0.2 m baseline, 0.1 px independent pixel noise | Symmetric PSD; principal axis aligns with viewing ray; Monte Carlo covariance within 3% | Passing |
+| Stereo uncertainty range scaling | `tests/triangulation_test.cpp` | 5 m and 10 m depth | Depth standard deviation ratio 4; lateral standard deviation ratio 2 | Passing |
+| Landmark augmentation integration | `tests/landmark_augmentation_test.cpp`, `tests/slam_integration_test.cpp` | Dense robot covariance, 5 landmarks, fully excited 200 Hz trajectory | Symmetric PSD active covariance; stable allocation through add/propagate/remove | Passing |
 | Measurement model optical axis | `tests/measurement_model_test.cpp` | `T_WB = T_BS = I`, landmark on optical axis | Pixel equals principal point within `1e-12` | Passing |
 | Measurement model ray-depth invariance | `tests/measurement_model_test.cpp` | Same ray at depths 1 m and 5 m | Identical pixel prediction within `1e-12` | Passing |
 | Measurement model inverse-pose convention | `tests/measurement_model_test.cpp` | Nontrivial `R_WB` and `p_WB` | Body-frame landmark and pixel match hand-derived values within `1e-12` | Passing |
@@ -69,6 +72,7 @@ a test before treating it as a regression gate.
 | 2026-08-14 | EuRoC IMU-only smoke, measured | MH_01_easy, 1 s (200 IMU steps) from first ground truth, initialized from ground truth | Position `0.0173 m`, velocity `0.0216 m/s`, orientation `0.00120 rad`; minimum covariance eigenvalue `6.6e-8`. Gates are `2.0 m / 3.0 m/s / 0.5 rad`, so the run sits ~100x inside them |
 | 2026-08-14 | EuRoC IMU-only drift growth | MH_01_easy, initialized from first ground truth, no updates | 1 s: `0.017 m`; 2 s: `0.053 m`; 5 s: `0.215 m`; 10 s: `0.364 m`; 20 s: `3.75 m`; 30 s: `19.33 m`. Reported position sigma `sqrt(trace(P_pp))` over the same horizons: `0.007`, `0.034`, `0.342`, `2.44`, `18.7`, `62.4 m` |
 | 2026-08-14 | Propagation step cost | MH_01_easy, 6,001 sequential `propagate(...)` calls, `RelWithDebInfo`, Apple silicon dev machine | `1.84`–`1.91 us` per step, against a `5000 us` budget at 200 Hz. Not a Jetson number |
+| 2026-08-14 | Landmark augmentation cost | 5 metric XYZ births, 0.2 m baseline, `RelWithDebInfo`, Apple silicon dev machine | `7,300 ns` per landmark in the integration test. Not a Jetson number |
 
 ## Future Estimator Metrics
 

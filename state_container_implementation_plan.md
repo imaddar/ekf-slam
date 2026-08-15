@@ -390,6 +390,10 @@ blamed elsewhere.
 - Monte Carlo empirical covariance matches the analytical covariance.
 - Degenerate disparity produces a controlled error.
 
+Gate 6 passes with rectified-rig validation, analytic anisotropic covariance,
+range-scaling checks, principal-axis checks, and a seeded 100,000-sample Monte
+Carlo comparison. The next stage is Step 7: landmark augmentation.
+
 ## Step 7: Landmark Augmentation
 
 Insert new landmarks into the joint state and covariance:
@@ -425,6 +429,10 @@ write and should be explicitly avoided.
   `P_rr J_r^T` expression, adding a heap allocation to every landmark birth —
   the one path this step exists to keep cheap.
 
+Both deferred items are now implemented: the insertion API takes an Eigen
+reference, and the new landmark's covariance corner has one writer so an
+asymmetric caller-supplied block is preserved exactly.
+
 ### Gate 7
 
 - `P_rl` is nonzero after augmentation.
@@ -441,6 +449,11 @@ write and should be explicitly avoided.
 - Different-frame landmarks inherit correlation through old cross-covariance.
 - Existing covariance blocks remain unchanged.
 - Monte Carlo landmark covariance matches the analytical result.
+
+Gate 7 passes with analytical covariance-column assembly, dense robot
+cross-correlation checks including velocity and bias rows, zero-pose and
+same-frame correlation tests, symmetry/PSD checks, and the explicit covariance
+corner test. The next stage is Step 8: end-to-end synthetic integration.
 
 ## Step 8: End-to-End Synthetic Integration
 
@@ -466,6 +479,12 @@ Connect propagation, registry, augmentation, and removal.
 - Augmentation cost per landmark is measured.
 - Timing results are recorded in `BENCHMARKS.md`.
 
+Gate 8 passes with a fully excited 200 Hz synthetic trajectory, five landmark
+births, stable preallocated storage through propagation and compaction, active
+covariance symmetry/PSD checks, and a recorded augmentation cost of 7,300 ns
+per landmark in the local `RelWithDebInfo` run. The next stage is Step 9:
+final documentation review.
+
 ## Step 9: Final Documentation and Architecture Review
 
 Before beginning camera measurement updates:
@@ -483,8 +502,12 @@ Before beginning camera measurement updates:
 
 ### Decision to force before the update phase
 
-**Batch versus sequential measurement updates.** This is unresolved and shapes
-how the update step is structured.
+**Batch versus sequential measurement updates.** Choose sequential stereo
+updates for the first camera-update implementation. Each observation keeps the
+innovation covariance at `4x4`, pixel noise is independent across landmarks,
+and the covariance update is applied immediately before the next observation.
+A batch update remains a measured optimization if profiling later shows the
+repeated update overhead matters.
 
 `S = H P H^T + R` scales with the *measurement* dimension, not the state
 dimension. One stereo observation gives four numbers, so `S` is `4x4`.
@@ -496,15 +519,16 @@ two are mathematically equivalent when measurement noise is uncorrelated across
 landmarks, which holds here. The tradeoff is real rather than free and should
 be measured.
 
-Note that the dominant cost in either case is the covariance update
+This decision closes Step 9's required pre-update choice. The dominant cost in
+either case is the covariance update
 `P+ = (I - K H) P`, which is `O(n^2)` at best — not the innovation inversion.
 
 ---
 
-Gate 1a passed in commits `a807817` and `56f4b03`. Gate 2 passed at `ad3da23`,
-which replaced zero-filled landmark covariance with a caller-supplied column and
-made compaction in-place. Step 3 is the next gated stage, and begins with the
-cross-covariance accessors rather than the transition math. Two Step 2 review
-items were deliberately deferred to the steps that already touch that code:
-the `add_landmark` corner-write ordering and its `Eigen::Ref` signature to
-Step 7, and compaction's column-phase row bound to Step 8.
+Gate 1a passed in commits `a807817` and `56f4b03`; Gate 2 passed at `ad3da23`;
+Gate 3 passed at `c95ef53`; Gate 4 passed at `7bcadc2`; and Gate 5 passed at
+`0e86866`. Gates 6, 7, and 8 are covered by the current triangulation,
+augmentation, and integration tests. Step 9 is complete: the architecture,
+scope, presentation notes, benchmarks, and this plan now describe the
+implemented metric XYZ path, the IMU-only artifact, right/local convention,
+batch compaction, and the sequential-update decision.
