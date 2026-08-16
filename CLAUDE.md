@@ -18,10 +18,12 @@ covariance type are in `state.hpp`; IMU nominal-state and covariance propagation
 is in `propagation.cpp`. `synthetic.cpp` generates analytic trajectories, IMU
 streams, and stereo observations for controlled validation.
 
-There is no camera measurement update, feature tracker, error-state struct, or
-ATE/RPE/NEES evaluation code. The bounded landmark state, stereo triangulation
-covariance, and metric XYZ augmentation path are implemented, but the complete
-camera update is not. Check `ARCHITECTURE.md` before assuming a module or type
+The sequential per-landmark stereo camera update lives in
+`measurement_update.cpp`, with error-state injection and the rotation reset
+Jacobian on `SlamState`. There is no feature tracker, no raw EuRoC
+undistortion/rectification, no marginalization, and no standalone ATE/RPE/NEES
+evaluation module (NEES is asserted inline in the closed-loop integration
+test). Check `ARCHITECTURE.md` before assuming a module or type
 exists — it documents what's actually built, not the target design in `scope.md`.
 Metrics and tolerances live in `BENCHMARKS.md`.
 
@@ -44,10 +46,12 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-90 tests across `parser_tests`, `state_tests`, `slam_state_tests`,
-`stereo_geometry_tests`, `measurement_model_tests`, `propagation_tests`, and
-`synthetic_tests`, plus triangulation, augmentation, and integration test
-binaries. No CI config and no standalone benchmark binary yet — metrics are
+121 tests across `parser_tests`, `state_tests`, `slam_state_tests`,
+`stereo_geometry_tests`, `measurement_model_tests`, `measurement_update_tests`,
+`propagation_tests`, and `synthetic_tests`, plus triangulation, augmentation,
+and integration test binaries. One test is intentionally disabled:
+`SlamClosedLoopTest.DISABLED_MonteCarloRobotNeesMeetsTheConsistencyTarget` is
+the acceptance test for the not-yet-implemented FEJ/OC-EKF work. No CI config and no standalone benchmark binary yet — metrics are
 asserted inside the test suite and recorded in `BENCHMARKS.md`.
 `parse_dataset(...)` loads a EuRoC sequence into the current `Dataset` shape.
 

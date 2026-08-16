@@ -191,6 +191,65 @@ separately, exposing a rotation-first-versus-position-first layout bug. The
 identity case also pins the intuitive result: the landmark block is exactly the
 projection factor and the position block is its negative.
 
+### The camera update: sequential vs. batch
+
+With `m` landmarks visible in one frame, there are two ways to fold them in.
+Batch stacks everything into a `4m x n` Jacobian and inverts one `4m x 4m`
+innovation covariance. Sequential applies them one at a time, each with a `4x4`
+inversion. This is the single most interesting design decision in the project,
+because the obvious framing — "which is faster?" — is the wrong question.
+
+**They are the same estimator.** Apply the Woodbury identity to one sequential
+step:
+
+```text
+P_i = (P_{i-1}^-1 + H_i^T R_i^-1 H_i)^-1
+```
+
+By induction the sweep telescopes to `P_0^-1 + sum_i H_i^T R_i^-1 H_i`, which is
+exactly the batch information update. Order does not matter, because addition
+commutes. So the choice is not about accuracy at all.
+
+**It is about gating.** Batch produces one Mahalanobis distance over `4m`
+degrees of freedom. A single bad feature match at 200 sigma fails the whole
+frame, and the statistic cannot say which landmark was responsible. Sequential
+produces `S_i` per landmark as a byproduct, so a 4-dof chi-square test per
+observation is free. That is the actual argument, and it is a robustness
+argument rather than a performance one. Flops back it up only mildly: the
+dominant `4 m n^2` covariance term is identical in both, and at `N = 50, m = 20`
+sequential costs 2.35 MFLOP against batch's 3.58.
+
+**The equivalence has preconditions, and two of them are easy to violate.**
+
+1. `R` must be block-diagonal across landmarks.
+2. Every `H_i` must be evaluated at the *same* linearization point.
+
+Condition 2 breaks under the most natural code you could write: update, inject
+the correction, then predict the next landmark from the updated state. That is a
+partially-iterated EKF — order-dependent, and it manufactures information in the
+directions that are not observable. So the nominal state is frozen for the whole
+frame and injection is deferred to a single operation at the end.
+
+**The ESEKF-specific trap.** Because the state is frozen, the innovation at step
+`i` is not the raw residual. It is:
+
+```text
+nu_i = z_i - h_i(x_nominal) - H_i * delta_x_accumulated
+```
+
+That third term is what makes the sweep telescope into the batch answer.
+Dropping it double-counts corrections already absorbed by earlier landmarks.
+Nothing about the code looks wrong without it, and the filter still converges —
+just to the wrong covariance.
+
+**How this was verified rather than argued.** The batch update was implemented
+anyway, as a test oracle that never runs on the hot path. The test asserts the
+sequential sweep matches it to `1e-12`, and that all six permutations of a
+three-landmark frame agree to `1e-10`. Those two assertions catch every failure
+mode the design has: dropping the accumulated-error term, relinearizing
+mid-sweep, and correlated noise. This mattered enormously later — see the NEES
+result.
+
 ### The propagation step
 
 One IMU sample in, updated state and covariance out:
@@ -399,6 +458,102 @@ Two things to say about this table:
    needs many runs and a chi-square interval. Saying so is better than
    over-claiming; it is also precisely the measurement the next phase adds.
 
+### The camera update, and a negative result worth presenting
+
+On a 2 s synthetic run with a real accelerometer bias, dead reckoning ends
+`0.163 m` from truth. With camera updates the same run ends at `0.0545 m`, a 3x
+reduction, with 195 observations applied and 5 rejected by the gate. Landmark
+estimates converge to `0.070 m` mean error. That is the expected result.
+
+The interesting result is the one that failed.
+
+NEES over 50 Monte Carlo runs, 15 dof, expected 15:
+
+| Configuration | Average NEES | 95% interval | Verdict |
+|---|---|---|---|
+| Propagation only | `13.56` | `[13.52, 16.56]` | Consistent |
+| With camera updates | `24.23` | `[13.52, 16.56]` | **Over-confident** |
+
+Per-block, against an expected `3.0` each:
+
+| Block | NEES |
+|---|---|
+| Position | `2.73` |
+| Velocity | `4.05` |
+| Orientation | `6.35` |
+| Accelerometer bias | `7.16` |
+| Gyroscope bias | `4.81` |
+
+The filter reports roughly `1.6x` more confidence than its actual error
+justifies. Position is fine; orientation and the biases are not.
+
+**Why this is a finding and not a bug.** Three pieces of evidence, all
+pre-existing, isolate it:
+
+1. The propagation-only control passes *in the same harness*. That rules out
+   `Q_d`, the discretization, and the covariance container.
+2. The sequential sweep is asserted equal to a dense batch update within
+   `1e-12`. That rules out the sweep structure and the accumulated-error term.
+3. The measurement Jacobians match central differences to `1e-5`, with a test
+   that provably fails under the wrong rotation convention. That rules out the
+   linearization algebra.
+
+**Then the obvious explanation turned out to be wrong.** The textbook answer for
+an inconsistent EKF-SLAM filter is spurious information in the unobservable
+directions — global position and yaw — fixed by first-estimates Jacobians or an
+observability-constrained EKF. That was the first diagnosis, and it was written
+into the design docs before it was tested.
+
+Splitting the orientation error along gravity refutes it:
+
+| Component | NEES | Expected |
+|---|---|---|
+| Yaw (1 dof, unobservable) | `1.41` | `1.0` |
+| Tilt (2 dof, observable) | `4.81` | `2.0` |
+
+Yaw — the direction the whole FEJ literature is about — is nearly consistent.
+The inconsistency is in tilt, the *observable* part of the orientation, pinned by
+gravity. Three more experiments closed it out: widening the chi-square gate to
+infinity moves NEES only `24.23 -> 23.66`, so it is not selection bias; NEES is
+already `20.99` at `0.5 s` and plateaus by `2 s`, so it is not accumulation; and
+shrinking the initial tilt error drives the filter back to consistency:
+
+| Initial tilt sigma | Total NEES | Tilt NEES |
+|---|---|---|
+| `0.01 rad` | `24.23` | `4.81` |
+| `0.003 rad` | `17.24` | `2.65` |
+| `0.001 rad` | `15.92` (inside the bound) | `1.86` |
+
+That is the signature of the EKF's first-order approximation, not of a defect.
+It concentrates in tilt because rotation is the only state that enters the
+measurement nonlinearly — position and landmark position enter exactly linearly
+for a fixed `R`.
+
+Two conclusions the wrong diagnosis would have missed. **The fix is an iterated
+EKF, not FEJ** — relinearizing toward the posterior attacks a second-order
+error, while FEJ attacks a problem this filter does not currently have. And
+**the scenario is pessimistic**: `0.01 rad` is `0.57 deg` of initial tilt error,
+worse than a real system starts from, since static-start gravity alignment
+reaches `~0.001 rad` — the regime where this filter is already consistent.
+
+A separate finding fell out of the same sweep: the accelerometer-bias
+over-confidence (`7.16`) was mostly an *under-excited test trajectory*, not a
+filter property. Adding roll/pitch excitation drops it to `3.88`. Tilt error and
+accelerometer bias are confounded over short windows because a tilt of `dtheta`
+mimics a horizontal acceleration of `g * dtheta`, and the original trajectory
+rotated almost entirely in yaw, which does not break that degeneracy.
+
+**What was done about it.** The consistency assertion was not loosened to make
+the suite green. The live test asserts a regression ceiling of `30` so the number
+cannot silently worsen, and the real bound survives as a deliberately disabled
+test that is the acceptance criterion for the iterated-EKF work.
+
+This is the part of the project worth defending in a technical interview: a
+metric that only existed because the covariance was being tested at all, a
+failure that was diagnosed to a specific cause rather than tuned away, and a
+decision to ship a known-imperfect filter with the imperfection measured and
+documented instead of hidden.
+
 ### Runtime
 
 6,001 sequential propagation steps in 11.1–11.4 ms → **1.84–1.91 us per step**,
@@ -441,6 +596,28 @@ is not specified to produce the same values from the same seed across standard
 library implementations. A seeded test that passes on macOS and fails on the
 Jetson for that reason would have cost days.
 
+**Implement the expensive alternative as an oracle.** Batch updating was
+rejected on design grounds and then implemented anyway, purely as a test. That
+single decision is what made the NEES failure diagnosable: because the sweep was
+already proven equal to batch and the Jacobians already proven against finite
+differences, an inconsistent filter could be attributed to linearization within
+minutes instead of being a multi-day hunt through the covariance math. Verifying
+an equivalence you are confident about is not wasted work; it is what buys the
+ability to trust the components you are *not* currently suspicious of.
+
+**A negative result is a result, if it is isolated.** "NEES is 24 instead of 15"
+is a bug report. "NEES is 24 with updates and 13.6 without, concentrated in
+orientation and bias, with the sweep proven equal to batch and the Jacobians
+proven against finite differences" is a finding with a named cause and a named
+fix. The difference is entirely in what was already verified before the failure
+appeared.
+
+**Resist the tuned tolerance.** The fastest way to a green suite was to widen
+the NEES bound until it passed. That would have destroyed the only signal the
+project has about filter consistency. A regression ceiling plus a disabled
+acceptance test keeps the suite green *and* keeps the failure visible — the
+number can never silently get worse, and the target never gets forgotten.
+
 **Optimization flags are a correctness input for template-heavy code.** The
 default unoptimized build made the suite ~50x slower, which put a
 useful-sample-count Monte Carlo test out of reach — the *methodology* was gated
@@ -452,7 +629,16 @@ on the build type.
 
 **Immediate (finishes Phase 1):**
 
-- Camera measurement update: feature tracking, EKF update, marginalization.
+- An iterated EKF, to close the measured NEES gap. The diagnosis points at
+  second-order linearization error in tilt, not at the unobservable directions,
+  so this is the targeted fix rather than FEJ. The acceptance test already exists
+  and is disabled.
+- Static-start gravity alignment. Initialization quality turns out to be a
+  consistency lever: the filter is already consistent at the initial tilt error
+  a real alignment achieves.
+- Feature tracking (KLT vs. descriptor) and raw EuRoC undistortion/rectification,
+  the two things standing between the update and real data.
+- Landmark marginalization and a map-management policy.
 - ATE / RPE / NEES evaluation across MH_01–V2_03. NEES is the one that closes
   the loop on the covariance work above — the Monte Carlo test proves the
   propagated covariance is self-consistent; NEES proves it is consistent with

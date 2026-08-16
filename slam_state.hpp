@@ -63,6 +63,13 @@ public:
     ParseResult<Eigen::Vector3d> landmark_position(LandmarkId id) const;
     ParseResult<void> remove_landmarks(std::span<const LandmarkId> ids);
 
+    // Injects an active-dimension error state into the nominal state and applies
+    // the rotation reset Jacobian to P. Ordering follows CONVENTIONS.md section 1;
+    // the rotation error composes on the right, every other block is additive.
+    // Lives on the container so the manifold operation and the private landmark
+    // storage stay in one place.
+    ParseResult<void> inject_error_state(const Eigen::Ref<const Eigen::VectorXd>& error_state);
+
     NominalState robot;
 
 private:

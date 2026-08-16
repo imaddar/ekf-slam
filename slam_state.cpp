@@ -195,6 +195,53 @@ ParseResult<Eigen::Vector3d> SlamState::landmark_position(LandmarkId id) const {
     return landmark_positions_.col(static_cast<Eigen::Index>(iterator->second));
 }
 
+ParseResult<void> SlamState::inject_error_state(
+    const Eigen::Ref<const Eigen::VectorXd>& error_state) {
+    if (error_state.size() != active_dim()) {
+        return std::unexpected(std::format(
+            "error_state: expected size {}, found {}", active_dim(), error_state.size()));
+    }
+    if (!error_state.allFinite()) {
+        return std::unexpected("error_state: expected finite values");
+    }
+
+    constexpr int kPositionIndex = 0;
+    constexpr int kVelocityIndex = 3;
+    constexpr int kOrientationIndex = 6;
+    constexpr int kAccelerometerBiasIndex = 9;
+    constexpr int kGyroscopeBiasIndex = 12;
+
+    const Eigen::Vector3d delta_theta = error_state.segment<kLandmarkDim>(kOrientationIndex);
+
+    robot.position += error_state.segment<kLandmarkDim>(kPositionIndex);
+    robot.velocity += error_state.segment<kLandmarkDim>(kVelocityIndex);
+    // Right/local perturbation, matching propagation and CONVENTIONS.md section 2.
+    robot.orientation = robot.orientation * Sophus::SO3d::exp(delta_theta);
+    robot.accelerometer_bias += error_state.segment<kLandmarkDim>(kAccelerometerBiasIndex);
+    robot.gyroscope_bias += error_state.segment<kLandmarkDim>(kGyroscopeBiasIndex);
+
+    for (std::size_t index = 0; index < active_landmarks_; ++index) {
+        const int offset = landmark_offset_for_storage_index(index);
+        landmark_positions_.col(static_cast<Eigen::Index>(index)) +=
+            error_state.segment<kLandmarkDim>(offset);
+    }
+
+    // Reset Jacobian for the rotation block. Re-anchoring the error to the
+    // injected orientation maps the residual error through the SO(3) right
+    // Jacobian at delta_theta; every other block re-anchors as identity.
+    // Sophus exposes only the left Jacobian, and J_r(x) = J_l(-x).
+    const Eigen::Matrix3d reset = Sophus::SO3d::leftJacobian(-delta_theta);
+    const int dimension = active_dim();
+    const Eigen::Matrix<double, kLandmarkDim, Eigen::Dynamic> rotated_rows =
+        reset * covariance_.block(kOrientationIndex, 0, kLandmarkDim, dimension);
+    covariance_.block(kOrientationIndex, 0, kLandmarkDim, dimension) = rotated_rows;
+    const Eigen::Matrix<double, Eigen::Dynamic, kLandmarkDim> rotated_columns =
+        covariance_.block(0, kOrientationIndex, dimension, kLandmarkDim) * reset.transpose();
+    covariance_.block(0, kOrientationIndex, dimension, kLandmarkDim) = rotated_columns;
+
+    return {};
+}
+
 ParseResult<void> SlamState::remove_landmarks(std::span<const LandmarkId> ids) {
     if (ids.empty()) {
         return {};

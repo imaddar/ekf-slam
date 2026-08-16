@@ -227,8 +227,18 @@ The nonzero pose blocks land at position columns `0..2` and orientation columns
 measurement. The observed landmark contributes one 3-column block. Every other
 landmark block is structurally zero.
 
+A stereo observation stacks two of these into 4 rows, `[u0, v0, u1, v1]`,
+matching `triangulate_stereo(...)` pixel ordering. Both rows share the pose and
+the landmark, so the stacked block touches the same 9 state columns:
+
+```text
+C = {0, 1, 2} U {6, 7, 8} U {offset, offset+1, offset+2}
+```
+
 Do not materialize dense `H` by default. Build or apply only the active nonzero
-blocks unless a test or debug path explicitly needs the dense matrix.
+blocks unless a test or debug path explicitly needs the dense matrix. In
+particular `H P` is three `4x3` blocks times three row strips of `P`, and
+`M H^T` is the same three columns of `M`.
 
 ## 10. Stereo Triangulation and Augmentation
 
@@ -320,13 +330,93 @@ the two values aligned until it is promoted to shared configuration.
 Zero `dt` is a legal no-op. Negative and non-finite timesteps are errors because
 they would run covariance propagation backwards or produce non-finite state.
 
-## 12. Update and Marginalization Decisions
+## 12. Camera Update
 
-The first camera update should use sequential stereo observations. One landmark
+The camera update is sequential, one stereo observation at a time. One landmark
 keeps the innovation covariance at `4x4`; batching `m` landmarks makes it
-`4m x 4m`. Sequential and batched updates are mathematically equivalent under
-uncorrelated measurement noise, which is the current assumption, but their
-implementation shape is different.
+`4m x 4m`. Sequential and batched updates are algebraically identical, both
+reducing to the same information sum:
+
+```text
+P_post^-1 = P_prior^-1 + sum_i H_i^T R_i^-1 H_i
+```
+
+That identity holds only under two conditions, and each has a rule attached.
+
+**Uncorrelated measurement noise across landmarks.** `R` must be
+block-diagonal. Within one landmark the `4x4` block may be dense.
+
+**One linearization point per frame.** Every prediction and Jacobian is built
+from the nominal state as it stands at frame entry, before any of them touches
+`P`. Do not relinearize mid-sweep: it makes the result depend on observation
+order and injects information into the unobservable directions.
+
+Injection is deferred to a single operation at the end of the frame. The nominal
+state stays frozen during the sweep and the error state accumulates, so the
+innovation at step `i` is:
+
+```text
+nu_i = z_i - h_i(x_nominal) - H_i * delta_x_accumulated
+```
+
+The `-H_i * delta_x_accumulated` term is what makes the sweep telescope into the
+batch answer. Dropping it double-counts the corrections already absorbed by
+landmarks `1..i-1`. Injecting after each observation instead is not a repair:
+the residual then sits at a different operating point than the frozen `H`, and
+on the rotation block the two are not even first-order equivalent because
+injection composes as `R Exp(delta theta)` rather than adding.
+
+Gating happens against the prior covariance, before any update is applied.
+`P` shrinks monotonically through a sweep, so a gate evaluated against the
+running covariance is tighter for later landmarks and can reject a good
+measurement because earlier ones already shrank `P`. Gating needs no snapshot:
+`H_i P H_i^T` touches only the `9x9` sub-block at the observation's own columns.
+
+Measurement noise for the update is per-pixel detector noise. It is not
+`StereoTriangulation::covariance`, which is the propagated 3D position
+covariance consumed at augmentation. Using the latter would double-count the
+pixel noise and reuse information already in `P_ll` from the landmark's birth.
+
+A landmark is never updated in the frame that created it. Its triangulated
+position is a deterministic function of exactly those pixels, so prior and
+measurement are perfectly correlated and the independence assumption fails.
+Augment after the update, which also keeps landmark-offset invalidation
+(section 16) outside the sweep.
+
+The covariance update uses factored Joseph form:
+
+```text
+M = P - K (H P)
+P = M - (M H^T) K^T + K R K^T
+```
+
+Under the optimal gain this equals `P - K (H P)` in exact arithmetic. That is
+not a reason to simplify it; being computed differently is the entire point,
+because a sweep applies `m` successive updates and roundoff compounds.
+
+### Marginalization
+
+Landmark removal is moment-form row/column deletion and dense compaction of
+`P`, not a Schur complement. Schur complements belong to information-form or
+factor-graph marginalization, not this covariance-form EKF state.
+
+### Injection and reset
+
+Injection composes the rotation on the right and adds every other block. The
+covariance is then re-anchored to the injected orientation through the SO(3)
+right Jacobian:
+
+```text
+G_theta = J_r(delta theta_hat) ~= I - 0.5 * [delta theta_hat]_x
+P <- G P G^T,   G = blkdiag(I3, I3, G_theta, I3, I3, I_{3N})
+```
+
+Sophus exposes only `leftJacobian`; use `J_r(x) = J_l(-x)`.
+
+This reset is a similarity transform, not an information change, so `G P G^T`
+is not Loewner-ordered against the prior. A test asserting that the update
+decreases `P` must undo the reset first rather than absorbing it into a
+tolerance.
 
 Landmark removal is moment-form row/column deletion and dense compaction of
 `P`, not a Schur complement. Schur complements belong to information-form or

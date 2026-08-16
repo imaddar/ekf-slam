@@ -22,6 +22,7 @@ add_library(ekf_slam_parser
     augmentation_jacobians.cpp
     landmark_augmentation.cpp
     measurement_model.cpp
+    measurement_update.cpp
     propagation.cpp
     slam_state.cpp
     stereo_geometry.cpp
@@ -152,6 +153,25 @@ if(BUILD_TESTING)
     )
 
     gtest_discover_tests(measurement_model_tests)
+
+    add_executable(measurement_update_tests
+        tests/measurement_update_test.cpp
+    )
+
+    target_link_libraries(measurement_update_tests
+        PRIVATE
+            ekf_slam_parser
+            GTest::gtest_main
+    )
+
+    target_compile_options(measurement_update_tests
+        PRIVATE
+            -Wall
+            -Wextra
+            -Werror
+    )
+
+    gtest_discover_tests(measurement_update_tests)
 
     add_executable(augmentation_jacobians_tests
         tests/augmentation_jacobians_test.cpp

@@ -16,6 +16,7 @@ parser.cpp          Top-level dataset loading orchestration
 parser_csv.hpp/cpp  Internal CSV parsing and stereo frame pairing
 parser_yaml.hpp/cpp Internal EuRoC calibration YAML parsing
 measurement_model.hpp/cpp Pure pinhole prediction h(.) and sparse Jacobian blocks
+measurement_update.hpp/cpp Sequential per-landmark stereo EKF update and gating
 propagation.hpp/cpp Public IMU nominal-state propagation
 state.hpp           Public nominal ESEKF state and covariance types
 slam_state.hpp/cpp  Public SLAM state, registry, and covariance storage
@@ -30,6 +31,7 @@ docs/parser.md      Parser implementation notes and future direction
 present.md          Technical deep-dive presentation material
 tests/parser_test.cpp  C++ parser tests
 tests/measurement_model_test.cpp Pure camera measurement-model tests
+tests/measurement_update_test.cpp Sequential update, batch-equivalence, and gating tests
 tests/propagation_test.cpp  C++ propagation tests
 tests/state_test.cpp   C++ state-header compile tests
 tests/slam_state_test.cpp  SLAM state storage tests
@@ -37,7 +39,7 @@ tests/stereo_geometry_test.cpp Metric XYZ frame-transform tests
 tests/synthetic_test.cpp Synthetic trajectory and IMU propagation tests
 tests/triangulation_test.cpp Stereo triangulation covariance tests
 tests/landmark_augmentation_test.cpp Landmark covariance augmentation tests
-tests/slam_integration_test.cpp End-to-end SLAM state integration test
+tests/slam_integration_test.cpp End-to-end SLAM state and closed-loop filter tests
 ```
 
 There is a public nominal ESEKF state layout, IMU-only state covariance type,
@@ -46,10 +48,12 @@ batch compaction, IMU nominal-state and covariance propagation, joint SLAM
 covariance propagation, metric XYZ stereo geometry, a pure pinhole camera
 measurement model and sparse analytical Jacobian blocks for one world landmark,
 rectified stereo triangulation uncertainty, analytical augmentation Jacobians,
-and metric XYZ landmark covariance augmentation. Camera measurement updates,
-feature tracking, raw EuRoC stereo rectification/undistortion, and filter
-marginalization do not exist yet. A synthetic data harness exists for controlled
-pre-EuRoC validation of propagation and SLAM-state behavior.
+metric XYZ landmark covariance augmentation, error-state injection with the
+rotation reset Jacobian, and a sequential per-landmark stereo camera update with
+chi-square gating. Feature tracking, raw EuRoC stereo
+rectification/undistortion, and filter marginalization do not exist yet. A
+synthetic data harness exists for controlled pre-EuRoC validation of
+propagation, SLAM-state, and closed-loop filter behavior.
 
 ## C++ root skeleton
 
@@ -106,6 +110,18 @@ Visibility gating (`Z <= 0`) and image-bound checks are also outside this API.
 `[delta p_W, delta theta_B]`, a `2x3` metric-XYZ landmark block, and the
 resolved landmark state-column offset. The future update inserts the pose halves
 at robot columns `0..2` and `6..8`, avoiding a dense mostly-zero Jacobian.
+
+`measurement_update.hpp/cpp` defines the camera update.
+`make_stereo_measurement_blocks(...)` stacks the two per-camera predictions and
+Jacobians into one 4-row stereo block ordered `[u0, v0, u1, v1]` and surfaces
+both depths plus a `visible` flag, leaving the Jacobians zero when either depth
+is non-positive. `update_stereo_frame(...)` runs the sequential sweep: it
+predicts, linearizes, and chi-square gates every observation against the prior
+covariance without writing to `P`, then applies the surviving observations one
+at a time in ascending landmark-offset order, then injects once. It reports
+per-observation diagnostics (outcome, Mahalanobis distance, prior residual) and
+the injected error state. Observations of unknown landmarks are skipped rather
+than treated as errors.
 
 `augmentation_jacobians.hpp/cpp` defines the analytical metric XYZ augmentation
 derivatives. It uses the right/local orientation convention and the established
@@ -222,6 +238,15 @@ agreement between injected noise and the calibration densities.
   exactly.
 - `SlamState::landmark_block(storage_index)` — public. Returns a bounded,
   compile-time-sized `3x3` covariance block view at a capacity slot.
+- `SlamState::inject_error_state(error_state)` — public. Injects an
+  active-dimension error state into the nominal state, composing the rotation on
+  the right, and applies the rotation reset Jacobian to `P`.
+- `make_stereo_measurement_blocks(robot, landmark_world, cam0, cam1, offset)` —
+  public. Stacks both cameras into one 4-row stereo Jacobian and prediction, and
+  reports depth and visibility.
+- `update_stereo_frame(state, observations, cam0, cam1, pixel_covariance, options)` —
+  public. Runs the sequential per-landmark stereo update for one frame: gate
+  against the prior, sweep, inject once.
 - `SlamState::robot_landmark_covariance()` and
   `SlamState::landmark_landmark_covariance()` — public. Return active-region
   views of `P_rl` and `P_ll`; inactive landmark capacity is excluded.
@@ -295,6 +320,13 @@ Three commitments drive most of the rest:
    order `Phi`, first order `Q_d`, constant-input integration — is the simplest
    form whose error is understood and measured. Each has a recorded upgrade path
    and a benchmark that would show the upgrade paying off.
+4. **Every equivalence claim has an oracle.** Where two formulations are
+   supposed to agree, the more expensive one is implemented as a test and the
+   agreement is asserted numerically rather than argued. The sequential camera
+   update is checked against a dense batch update; augmentation and propagation
+   Jacobians are checked against central differences. This is what makes it
+   possible to attribute a NEES failure to linearization rather than to a
+   covariance bug, which is exactly the call the camera update forced.
 
 ### Filter formulation
 
@@ -490,6 +522,62 @@ work.
   would blur two different contracts: fixed 15x15 IMU-only propagation versus
   joint covariance propagation with landmark cross-block invariants.
 
+### Camera update decisions
+
+- **Sequential per-landmark updates, not batch.** Under block-diagonal `R` and a
+  shared linearization point the two are algebraically identical, both reducing
+  to `P^-1 + sum_i H_i^T R_i^-1 H_i`. Sequential was chosen for per-landmark
+  chi-square gating, `4x4` innovation factorizations instead of one `4m x 4m`,
+  and a small fixed working set. The dominant `4 m n^2` covariance term is the
+  same either way; at `N = 50, m = 20` sequential costs about 2.35 MFLOP against
+  batch's 3.58. Batch exists only as a test oracle. The condition to revisit is
+  cache, not flops: sequential streams `P` once per landmark, which is free
+  while `P` fits in L2 (`n = 165` is 218 KB) and expensive when it does not
+  (`N = 200` is 3.0 MB and about 120 MB of traffic per frame).
+- **One linearization point per frame, injection deferred to the end.** The
+  nominal state is frozen for the sweep and the error state accumulates, which
+  is what makes the sweep equal the batch answer and keeps it independent of
+  observation order. It also makes the SO(3) injection and the covariance reset
+  happen once per frame instead of once per landmark. Relinearizing mid-sweep is
+  the natural code shape and is the wrong one: it is order-dependent and
+  manufactures information in the unobservable directions, the opposite of the
+  direction the OC-EKF/FEJ open decision needs to move.
+- **Gate against the prior covariance.** `P` shrinks monotonically through a
+  sweep, so gating against the running covariance is tighter for later landmarks
+  and can reject a good measurement because earlier ones already shrank `P`.
+  Prior gating is order-independent and matches the diagonal blocks of the batch
+  `S`. It errs loose rather than tight, which is the safer direction. It is also
+  nearly free: `H_i P H_i^T` needs only the `9x9` sub-block at the observation's
+  own columns, so no covariance snapshot is required.
+- **Factored Joseph form.** `P = M - (M H^T) K^T + K R K^T` with
+  `M = P - K (H P)`, three rank-4 `n^2` updates reusing the same 9-column
+  gather. Under the optimal gain this is algebraically equal to `P - K (H P)`,
+  so the only reason to write it this way is roundoff behaviour across `m`
+  successive updates; it must not be "simplified". Square-root or UD
+  factorization remains the real upgrade if PSD ever has to be guaranteed rather
+  than asserted. A `use_joseph_form` flag exists to compare the two, not to
+  switch off in production.
+- **Injection and the rotation reset live on `SlamState`.** `inject_error_state`
+  is a container method rather than update-module code because landmark position
+  storage is private and the SO(3) manifold operation should exist in exactly one
+  place. The reset Jacobian is the SO(3) right Jacobian `J_r(delta theta_hat)`,
+  applied to the orientation rows and columns only. Skipping it is a common
+  shortcut; it is implemented here because it costs `18n` flops once per frame.
+  Note it is a similarity transform, not an information change, so `G P G^T` is
+  not Loewner-ordered against the prior.
+- **The update never augments.** Observations of unknown landmarks are reported
+  as skipped and the caller decides whether to augment. A landmark must never be
+  updated in the frame that created it: its triangulated position is a
+  deterministic function of exactly those pixels, so prior and measurement are
+  perfectly correlated. Augmenting after the update also keeps landmark-offset
+  invalidation outside a sweep that holds offsets.
+- **Batch as a test oracle.** The equivalence proof is only worth as much as its
+  verification, so `tests/measurement_update_test.cpp` implements a dense
+  textbook batch update and asserts agreement to `1e-12`, plus invariance across
+  all permutations of a 3-landmark frame. Those two assertions catch every
+  failure mode this design has: dropping the accumulated-error term,
+  relinearizing mid-sweep, and correlated `R`.
+
 ### Error handling and API shape
 
 - **`std::expected<T, std::string>` over exceptions or error codes.** Exceptions
@@ -668,33 +756,47 @@ These are not implemented and not settled. They are recorded here so the
 tradeoffs are visible before the code exists, and each should move into the
 sections above (or out of this file) once it is actually built.
 
-- **Update linearization.** EKF vs. iterated EKF vs. an observability-constrained
-  variant. Standard VIO EKFs gain spurious yaw observability from linearizing
-  about different states at different times; OC-EKF or a first-estimates-Jacobian
-  scheme fixes it. This will show up as an over-confident yaw covariance in NEES
-  before it shows up in ATE.
-- **Outlier rejection.** Chi-square gating on the innovation is the default
-  choice; RANSAC in the frontend, robust cost functions, or per-landmark health
-  tracking are alternatives. Nothing is implemented, and a VIO filter without
-  gating fails on the first bad match.
+- **Update linearization.** Measured, not predicted. Over 50 Monte Carlo runs
+  the propagation-only filter sits at NEES `13.56` inside the `[13.52, 16.56]`
+  bound; with camera updates the same scenario reaches `24.23`. The sweep is
+  proven equal to a batch update and the Jacobians are verified against central
+  differences, so this is linearization rather than a covariance bug.
+
+  The obvious hypothesis -- spurious information in the unobservable yaw
+  direction, the effect FEJ and OC-EKF exist to fix -- is *not* what the data
+  shows. Splitting the orientation error along gravity gives yaw `1.41` against
+  an expected `1.0` while tilt is `4.81` against `2.0`. The inconsistency is in
+  the *observable* part of the orientation. Shrinking the initial tilt error
+  drives the whole filter back to consistency (`24.23 -> 17.24 -> 15.92` for
+  initial tilt sigma `0.01 -> 0.003 -> 0.001 rad`, the last inside the bound),
+  which is the signature of the EKF's first-order approximation. It concentrates
+  in tilt because rotation is the only state entering the measurement
+  nonlinearly.
+
+  That makes an **iterated EKF the targeted fix**, not FEJ. Relinearizing toward
+  the posterior attacks a second-order error; FEJ attacks a different problem
+  this filter does not currently have. Freezing the linearization point per frame
+  is already in place and remains a prerequisite if FEJ is wanted later.
+  See `BENCHMARKS.md` for the full experiment set;
+  `SlamClosedLoopTest.DISABLED_MonteCarloRobotNeesMeetsTheConsistencyTarget` is
+  the acceptance test.
+- **Outlier rejection beyond the innovation gate.** Chi-square gating against the
+  prior is implemented. RANSAC in the frontend, robust cost functions, and
+  per-landmark health tracking remain open and are not substitutes for each
+  other: the innovation gate catches a bad match only once it disagrees with the
+  filter, which a consistent-but-wrong track will not.
 - **Feature frontend.** [scope.md](scope.md) leaves KLT vs. descriptor matching
   open. KLT is cheaper and gives sub-pixel tracks on high-rate imagery;
   descriptors survive larger baselines and re-detection. This choice interacts
   with the landmark parameterization and with the Jetson budget.
-- **Measurement-update covariance form.** The landmark-state plan uses a
-  preallocated dense covariance, but the update formula itself is still open:
-  standard covariance update, Joseph form, or eventually a square-root/UD
-  factorization. Joseph form is the likely first upgrade once camera updates
-  start subtracting information from `P`.
-- **State injection and reset.** After each update the error state is injected
-  into the nominal state and reset to zero, which requires a covariance
-  reset Jacobian for the rotation block. Skipping the Jacobian is common and
-  usually a small error; it is a decision, not an oversight, and should be
-  recorded when the update lands.
 - **Initialization.** The EuRoC smoke test starts from ground truth, which a
   real system does not have. Static-start bias and gravity-direction estimation,
   or a short visual-inertial alignment, are the standard options and neither
-  exists.
+  exists. This is now coupled to the NEES finding above: the filter is consistent
+  at an initial tilt error of `0.001 rad` and inconsistent at `0.01 rad`, and
+  static gravity alignment from a stationary accelerometer reaches the former.
+  Initialization quality is therefore a consistency lever, not just a
+  convenience.
 - **Threading and time handling for Phase 2.** Lock-free queue vs. mutex-guarded
   buffer for IMU handoff, and how out-of-order or delayed camera frames are
   handled (buffer and reprocess, or drop). The current `propagate(...)` contract

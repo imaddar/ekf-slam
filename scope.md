@@ -51,7 +51,7 @@ Single-threaded, runs against recorded EuRoC sequences. Deliverable: ATE/RPE/NEE
 - [ ] Feature detection and tracking (decide: KLT vs descriptor-based)
 - [x] Metric XYZ landmark initialization from rectified stereo triangulation
 - [ ] Raw EuRoC stereo undistortion/rectification before landmark initialization
-- [ ] EKF update step
+- [x] EKF update step (sequential per-landmark stereo, chi-square gated)
 - [ ] Landmark marginalization
 
 #### Week 9–10: Benchmarking

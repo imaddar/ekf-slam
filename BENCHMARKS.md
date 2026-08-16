@@ -48,6 +48,17 @@ is measured, why it matters, and where the value comes from.
 | Covariance transition blocks | `tests/propagation_test.cpp` | Identity orientation, `dt = 0.1`, `P0 = I` | Hand-computed `Phi P Phi^T` blocks within `1e-9` | Passing |
 | Process-noise block placement | `tests/propagation_test.cpp` | Densities `2, 3`, random walks `4, 5`, `dt = 0.1` | Velocity `0.4 I`, orientation `0.9 I`, accel bias `1.6 I`, gyro bias `2.5 I`; position block exactly zero | Passing |
 | Timestep validation | `tests/propagation_test.cpp` | Negative, NaN, infinite, and zero `dt` | Error naming `timestep_seconds` for the first three; zero is an exact no-op | Passing |
+| Stereo measurement Jacobian vs. central differences | `tests/measurement_update_test.cpp` | Nontrivial pose, landmark at 6 m, right/local rotation perturbation | Analytic blocks match within `1e-5`; a left/global perturbation mismatches by `> 1e-3` | Passing |
+| Sequential update vs. batch oracle | `tests/measurement_update_test.cpp` | 3 and 5 landmarks, dense robot/landmark correlation | Error state and covariance agree within `1e-12` | Passing |
+| Sweep order invariance | `tests/measurement_update_test.cpp` | All 6 permutations of a 3-landmark frame | States agree within `1e-10` | Passing |
+| Joseph vs. simple covariance form | `tests/measurement_update_test.cpp` | 5-landmark frame | Agree within `1e-10`, as required under the optimal gain | Passing |
+| Update covariance validity | `tests/measurement_update_test.cpp` | 5-landmark sweep | Symmetric within `1e-14`; positive definite; Loewner decrease within `1e-12` after undoing the reset | Passing |
+| Reset Jacobian vs. numerical differentiation | `tests/slam_state_test.cpp` | `delta theta = [0.10, -0.14, 0.09]` | Matches within `1e-8`; changes `P` by `> 1e-3`, so the test has power | Passing |
+| Outlier rejection leaves no trace | `tests/measurement_update_test.cpp` | 5 landmarks, one displaced 50 px | Gated; remaining result matches a run with that observation removed within `1e-12` | Passing |
+| Closed-loop drift reduction | `tests/slam_integration_test.cpp` | 2.0 s, 200 Hz IMU, 20 Hz stereo, 5 landmarks, seed 11 | Updated position error strictly below the propagation-only baseline | Passing |
+| Closed-loop landmark accuracy | `tests/slam_integration_test.cpp` | 2.0 s, seed 23 | Mean landmark position error `< 0.5 m` | Passing |
+| Propagation-only Monte Carlo NEES | `tests/slam_integration_test.cpp` | 50 runs, 15 dof, initial error drawn from the initial covariance | Inside `[13.52, 16.56]` | Passing |
+| Updated-filter Monte Carlo NEES | `tests/slam_integration_test.cpp` | 50 runs, 15 dof, same scenario with camera updates | Regression ceiling `< 30`; the consistency bound `16.56` is **not** met | Passing as a ceiling, failing as consistency |
 
 ## Recorded Measurements
 
@@ -73,6 +84,11 @@ a test before treating it as a regression gate.
 | 2026-08-14 | EuRoC IMU-only drift growth | MH_01_easy, initialized from first ground truth, no updates | 1 s: `0.017 m`; 2 s: `0.053 m`; 5 s: `0.215 m`; 10 s: `0.364 m`; 20 s: `3.75 m`; 30 s: `19.33 m`. Reported position sigma `sqrt(trace(P_pp))` over the same horizons: `0.007`, `0.034`, `0.342`, `2.44`, `18.7`, `62.4 m` |
 | 2026-08-14 | Propagation step cost | MH_01_easy, 6,001 sequential `propagate(...)` calls, `RelWithDebInfo`, Apple silicon dev machine | `1.84`–`1.91 us` per step, against a `5000 us` budget at 200 Hz. Not a Jetson number |
 | 2026-08-14 | Landmark augmentation cost | 5 metric XYZ births, 0.2 m baseline, `RelWithDebInfo`, Apple silicon dev machine | `7,300 ns` per landmark in the integration test. Not a Jetson number |
+| 2026-08-15 | Closed-loop position error | Synthetic 2.0 s, 200 Hz IMU + 20 Hz stereo, 5 landmarks, accel bias `[0.05, -0.03, 0.02]`, 0.5 px noise, seed 11 | Propagation-only `0.163 m`; with camera updates `0.0545 m`, a 3.0x reduction. 195 observations applied, 5 gated |
+| 2026-08-15 | Closed-loop landmark error | Same scenario, seed 23 | Mean landmark position error `0.0703 m` against a `0.5 m` gate |
+| 2026-08-15 | Monte Carlo NEES, propagation only | 50 runs, 15 dof, 2.0 s, initial error drawn from the initial covariance | `13.56` against the `[13.52, 16.56]` 95% interval. Consistent |
+| 2026-08-15 | Monte Carlo NEES, with camera updates | Same 50 runs and scenario | `24.23`, outside the interval. Per-block against an expected `3.0`: position `2.73`, velocity `4.05`, orientation `6.35`, accel bias `7.16`, gyro bias `4.81` |
+| 2026-08-15 | Sequential update cost | 5 landmarks in state, ~5 stereo observations per frame, `RelWithDebInfo`, Apple silicon dev machine | `16,225 ns` per frame against a `50,000 us` budget at 20 Hz. Small-`N` number; the `O(m n^2)` term does not dominate yet. Not a Jetson number |
 
 ## Future Estimator Metrics
 
@@ -120,6 +136,92 @@ Initial reporting fields:
 | upper confidence bound | dimensionless | Chi-square interval upper bound |
 | pass fraction | percent | Fraction of samples inside the confidence interval |
 | state block | text | Pose, velocity, biases, landmarks, or full state |
+
+#### Current NEES finding
+
+The camera update is measurably over-confident, and the cause has been isolated
+by experiment rather than asserted. Propagation alone sits at `13.56` inside the
+`[13.52, 16.56]` interval; adding camera updates moves the same scenario to
+`24.23`.
+
+Per-block, against expected `3.0` each, plus the orientation error split along
+gravity (yaw, 1 dof) and across it (tilt, 2 dof):
+
+| Block | Yaw-dominant trajectory | Roll/pitch excited |
+|---|---|---|
+| Position | `2.73` | `2.47` |
+| Velocity | `4.05` | `5.11` |
+| Orientation | `6.35` | `6.47` |
+| Accelerometer bias | `7.16` | `3.88` |
+| Gyroscope bias | `4.81` | `3.70` |
+| Yaw (expected `1.0`) | `1.41` | `1.15` |
+| Tilt (expected `2.0`) | `4.81` | `5.23` |
+| **Total** | **`24.23`** | **`21.44`** |
+
+Four experiments narrow this down.
+
+**It is not the sweep, the Jacobians, or the covariance container.** The
+sequential update is asserted equal to a dense batch update within `1e-12`, the
+Jacobians match central differences with a test that fails under the wrong
+rotation convention, and the propagation-only control passes in the same
+harness.
+
+**It is not gate-induced selection bias.** Widening the chi-square threshold
+from `9.4877` to `13.2767` to effectively infinite moves NEES only
+`24.23 -> 24.03 -> 23.66`.
+
+**It is not accumulation over updates.** NEES is already `20.99` after `0.5 s`
+and plateaus: `21.95` at `1 s`, `24.23` at `2 s`, `23.52` at `4 s`. Spurious
+information accumulating over many updates would grow monotonically.
+
+**It is not the unobservable yaw direction.** This is the result that overturns
+the obvious hypothesis. Yaw NEES is `1.41` against an expected `1.0`, and
+improves to `1.15` with more excitation. The inconsistency lives in *tilt*
+(`4.81` against `2.0`), which is the observable part of the orientation, pinned
+by gravity. The classic Huang/Mourikis unobservable-subspace effect is not the
+dominant term here.
+
+**It is second-order linearization error.** Shrinking the initial tilt error
+while holding everything else fixed:
+
+| Initial tilt sigma | Total NEES | Tilt NEES (expected `2.0`) | Yaw NEES (expected `1.0`) |
+|---|---|---|---|
+| `0.01 rad` | `24.23` | `4.81` | `1.41` |
+| `0.003 rad` | `17.24` | `2.65` | `0.89` |
+| `0.001 rad` | `15.92` | `1.86` | `0.97` |
+
+At `0.001 rad` the filter is *consistent*: `15.92` sits inside `[13.52, 16.56]`.
+Converging to consistency as the operating point approaches truth is the
+signature of the EKF's first-order approximation, not of a defect. It
+concentrates in tilt because rotation is the only state that enters the
+measurement nonlinearly -- position and landmark position enter exactly linearly
+for a fixed `R`.
+
+Two consequences for what to fix:
+
+- **An iterated EKF is the targeted fix**, not first-estimates Jacobians. FEJ and
+  OC-EKF address spurious information in the unobservable directions, and yaw is
+  already consistent here. Relinearizing toward the posterior is what attacks a
+  second-order error.
+- **The scenario is pessimistic.** A `0.01 rad` (`0.57 deg`) initial tilt error
+  is worse than a real system starts from; static-start gravity alignment from a
+  stationary accelerometer reaches `~0.001 rad`, which is the regime where this
+  filter is already consistent. Initialization is tracked as its own open
+  decision in `ARCHITECTURE.md`.
+
+Separately, the accelerometer-bias over-confidence (`7.16`) was mostly a
+under-excited test trajectory rather than a filter property: adding roll/pitch
+excitation drops it to `3.88` without touching tilt. Accelerometer bias and tilt
+are confounded over short windows because a tilt error of `dtheta` mimics a
+horizontal acceleration of `g * dtheta`, and yaw rotation does not break that
+degeneracy.
+
+`SlamClosedLoopTest.DISABLED_MonteCarloRobotNeesMeetsTheConsistencyTarget` is the
+acceptance test. The live test asserts a regression ceiling of `30` so the number
+cannot silently worsen. Loosening that ceiling to make a change pass would be
+hiding a defect; tightening it to `16.56` is the goal.
+`SlamClosedLoopTest.DISABLED_NeesDiagnosticSweep` reproduces the horizon and gate
+experiments above.
 
 ## Reporting Policy
 

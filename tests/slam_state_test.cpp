@@ -360,3 +360,141 @@ TEST(SlamStateTest, AddRemoveAddCompactsDeterministically) {
     EXPECT_EQ(*offset_two, kRobotDim);
     EXPECT_EQ(*offset_three, kRobotDim + kLandmarkDim);
 }
+
+// ---------------------------------------------------------------------------
+// Error-state injection and covariance reset
+// ---------------------------------------------------------------------------
+
+TEST(SlamStateInjectionTest, ZeroErrorStateIsAnExactNoOp) {
+    const auto result = make_state(2);
+    ASSERT_TRUE(result) << result.error();
+    SlamState state = std::move(*result);
+    ASSERT_TRUE(state.add_landmark(
+        1, Eigen::Vector3d{1.0, 2.0, 3.0}, make_landmark_covariance_column(state, 100.0)));
+
+    const NominalState before = state.robot;
+    const Eigen::MatrixXd covariance_before = state.active_covariance();
+
+    ASSERT_TRUE(state.inject_error_state(Eigen::VectorXd::Zero(state.active_dim())));
+
+    EXPECT_EQ(state.robot.position, before.position);
+    EXPECT_EQ(state.robot.velocity, before.velocity);
+    EXPECT_EQ(state.robot.accelerometer_bias, before.accelerometer_bias);
+    EXPECT_EQ(state.robot.gyroscope_bias, before.gyroscope_bias);
+    EXPECT_LT(
+        (state.robot.orientation.inverse() * before.orientation).log().cwiseAbs().maxCoeff(), 1e-15);
+    EXPECT_LT(
+        (Eigen::MatrixXd{state.active_covariance()} - covariance_before).cwiseAbs().maxCoeff(),
+        1e-15);
+}
+
+TEST(SlamStateInjectionTest, InjectsAdditiveBlocksAndComposesTheRotation) {
+    const auto result = make_state(2);
+    ASSERT_TRUE(result) << result.error();
+    SlamState state = std::move(*result);
+    ASSERT_TRUE(state.add_landmark(
+        1, Eigen::Vector3d{1.0, 2.0, 3.0}, make_landmark_covariance_column(state, 100.0)));
+    ASSERT_TRUE(state.add_landmark(
+        2, Eigen::Vector3d{4.0, 5.0, 6.0}, make_landmark_covariance_column(state, 200.0)));
+
+    const NominalState before = state.robot;
+    Eigen::VectorXd error_state = Eigen::VectorXd::Zero(state.active_dim());
+    error_state.segment<3>(0) = Eigen::Vector3d{0.1, -0.2, 0.3};
+    error_state.segment<3>(3) = Eigen::Vector3d{-0.01, 0.02, -0.03};
+    const Eigen::Vector3d delta_theta{0.04, -0.05, 0.06};
+    error_state.segment<3>(6) = delta_theta;
+    error_state.segment<3>(9) = Eigen::Vector3d{0.001, 0.002, 0.003};
+    error_state.segment<3>(12) = Eigen::Vector3d{-0.004, 0.005, -0.006};
+    error_state.segment<3>(15) = Eigen::Vector3d{0.7, 0.8, 0.9};
+    error_state.segment<3>(18) = Eigen::Vector3d{-0.7, -0.8, -0.9};
+
+    ASSERT_TRUE(state.inject_error_state(error_state));
+
+    EXPECT_TRUE(state.robot.position.isApprox(before.position + error_state.segment<3>(0)));
+    EXPECT_TRUE(state.robot.velocity.isApprox(before.velocity + error_state.segment<3>(3)));
+    EXPECT_TRUE(state.robot.accelerometer_bias.isApprox(
+        before.accelerometer_bias + error_state.segment<3>(9)));
+    EXPECT_TRUE(state.robot.gyroscope_bias.isApprox(
+        before.gyroscope_bias + error_state.segment<3>(12)));
+    // Right/local composition, not addition.
+    const Sophus::SO3d expected = before.orientation * Sophus::SO3d::exp(delta_theta);
+    EXPECT_LT(
+        (state.robot.orientation.inverse() * expected).log().cwiseAbs().maxCoeff(), 1e-14);
+
+    EXPECT_TRUE(state.landmark_position(1)->isApprox(
+        Eigen::Vector3d{1.0, 2.0, 3.0} + error_state.segment<3>(15)));
+    EXPECT_TRUE(state.landmark_position(2)->isApprox(
+        Eigen::Vector3d{4.0, 5.0, 6.0} + error_state.segment<3>(18)));
+}
+
+TEST(SlamStateInjectionTest, ResetJacobianMatchesNumericalDifferentiation) {
+    // Large enough that the reset Jacobian is measurably different from identity;
+    // a test at delta_theta ~ 0 would pass with no reset applied at all.
+    const Eigen::Vector3d delta_theta{0.10, -0.14, 0.09};
+
+    // d(delta_theta_plus) / d(delta_theta) at delta_theta, where
+    // Exp(delta_theta_plus) = Exp(-delta_theta_hat) Exp(delta_theta).
+    Eigen::Matrix3d numerical;
+    const double step = 1e-6;
+    for (int axis = 0; axis < 3; ++axis) {
+        const Eigen::Vector3d basis = Eigen::Vector3d::Unit(axis);
+        const Eigen::Vector3d forward =
+            (Sophus::SO3d::exp(-delta_theta) * Sophus::SO3d::exp(delta_theta + step * basis)).log();
+        const Eigen::Vector3d backward =
+            (Sophus::SO3d::exp(-delta_theta) * Sophus::SO3d::exp(delta_theta - step * basis)).log();
+        numerical.col(axis) = (forward - backward) / (2.0 * step);
+    }
+
+    const auto result = make_state(1);
+    ASSERT_TRUE(result) << result.error();
+    SlamState state = std::move(*result);
+    const Eigen::MatrixXd prior = state.active_covariance();
+
+    Eigen::VectorXd error_state = Eigen::VectorXd::Zero(state.active_dim());
+    error_state.segment<3>(6) = delta_theta;
+    ASSERT_TRUE(state.inject_error_state(error_state));
+
+    Eigen::MatrixXd expected = prior;
+    expected.block(6, 0, 3, expected.cols()) = numerical * prior.block(6, 0, 3, prior.cols());
+    Eigen::MatrixXd columns = expected;
+    expected.block(0, 6, expected.rows(), 3) = columns.block(0, 6, columns.rows(), 3) * numerical.transpose();
+
+    EXPECT_LT(
+        (Eigen::MatrixXd{state.active_covariance()} - expected).cwiseAbs().maxCoeff(), 1e-8);
+    // The reset must actually change P; otherwise this test has no power.
+    EXPECT_GT((Eigen::MatrixXd{state.active_covariance()} - prior).cwiseAbs().maxCoeff(), 1e-3);
+}
+
+TEST(SlamStateInjectionTest, RejectsWrongSizeAndNonFiniteErrorStates) {
+    const auto result = make_state(2);
+    ASSERT_TRUE(result) << result.error();
+    SlamState state = std::move(*result);
+    ASSERT_TRUE(state.add_landmark(
+        1, Eigen::Vector3d{1.0, 2.0, 3.0}, make_landmark_covariance_column(state, 100.0)));
+
+    EXPECT_FALSE(state.inject_error_state(Eigen::VectorXd::Zero(state.active_dim() - 1)));
+    EXPECT_FALSE(state.inject_error_state(Eigen::VectorXd::Zero(state.active_dim() + 1)));
+
+    Eigen::VectorXd invalid = Eigen::VectorXd::Zero(state.active_dim());
+    invalid(4) = std::numeric_limits<double>::quiet_NaN();
+    EXPECT_FALSE(state.inject_error_state(invalid));
+}
+
+TEST(SlamStateInjectionTest, LeavesInactiveStoragePoisoned) {
+    const auto result = make_state(3);
+    ASSERT_TRUE(result) << result.error();
+    SlamState state = std::move(*result);
+    ASSERT_TRUE(state.add_landmark(
+        1, Eigen::Vector3d{1.0, 2.0, 3.0}, make_landmark_covariance_column(state, 100.0)));
+
+    Eigen::VectorXd error_state = Eigen::VectorXd::Zero(state.active_dim());
+    error_state.segment<3>(6) = Eigen::Vector3d{0.05, 0.05, 0.05};
+    ASSERT_TRUE(state.inject_error_state(error_state));
+
+    const Eigen::MatrixXd& covariance = SlamStateTestAccess::covariance(state);
+    const int active = state.active_dim();
+    EXPECT_TRUE(covariance.block(active, 0, state.storage_dim() - active, state.storage_dim())
+                    .array()
+                    .isNaN()
+                    .all());
+}
