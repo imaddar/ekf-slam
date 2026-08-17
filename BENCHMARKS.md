@@ -212,6 +212,12 @@ Two consequences for what to fix:
   OC-EKF address spurious information in the unobservable directions, and yaw is
   already consistent here. Relinearizing toward the posterior is what attacks a
   second-order error.
+  - **This conclusion does not survive real data.** It was drawn on a 2-second
+    synthetic run, which is far too short for yaw to drift. The MH_01 trace
+    analysis below measures yaw NEES at a median of `311` with reported yaw
+    sigma *shrinking* while yaw error grows. FEJ/OC-EKF is the targeted fix on
+    real sequences; the iterated-EKF argument stands only for the synthetic
+    tilt scenario it was measured on.
 - **The scenario is pessimistic.** A `0.01 rad` (`0.57 deg`) initial tilt error
   is worse than a real system starts from; static-start gravity alignment from a
   stationary accelerometer reaches `~0.001 rad`, which is the regime where this
@@ -336,6 +342,84 @@ outermost sample can land in `(width - 1, width)`, which the checked sampler
 rejects. The per-sample checks were load-bearing, not redundant. The tighter
 margin rejects features within one pixel of the border, which is why this row
 moves the accuracy numbers at all instead of being bit-identical.
+
+## MH_01 Consistency Diagnosis
+
+Computed from `mh01_benchmark 1500 --trace-dir`, 77,867 observations over 75 s.
+The gate statistic already recorded per observation is NIS, so no new
+instrumentation was needed. Numbers below are medians unless stated; innovation
+spreads use MAD-derived sigma because the residual distribution is heavy-tailed
+and the standard deviation reports the tail rather than the bulk.
+
+### Yaw is the problem
+
+| Quantity | Measured | Expected |
+|---|---|---|
+| Yaw NEES (1 dof) | `311.5` | `1` |
+| Tilt NEES (2 dof) | `41.3` | `2` |
+| Position NEES (3 dof) | `0.93` | `3` |
+
+| Window | Yaw error | Reported yaw sigma |
+|---|---|---|
+| 0-10 s | `5.7 mrad` | `0.86 mrad` |
+| 30-40 s | `19.9 mrad` | `1.15 mrad` |
+| 70-80 s | `60.9 mrad` | `0.52 mrad` |
+
+Yaw error grows 10x while the filter's reported yaw sigma *shrinks*. Global yaw
+is unobservable in VIO -- only gravity-orthogonal rotation is pinned by the
+accelerometer -- so its variance must be non-decreasing under any correct
+update, because the measurements carry no information about it. Observing it
+decrease is direct evidence of spurious information entering an unobservable
+direction, which is the textbook EKF-SLAM inconsistency that FEJ and OC-EKF
+exist to fix. Position NEES sits at `0.93`, below its expectation, so the error
+is not spread across the state: it is concentrated in yaw.
+
+### The measurement noise model is not the problem
+
+| Component | Bulk sigma (MAD) | Std | Assumed |
+|---|---|---|---|
+| `u0` | `0.23 px` | `0.41 px` | `0.5 px` |
+| `v0` | `0.26 px` | `1.39 px` | `0.5 px` |
+| `u1` | `0.24 px` | `0.50 px` | `0.5 px` |
+
+`R` is about 4x *conservative* in variance for the bulk of measurements, not
+understated. That also explains the NIS distribution: median `0.725` against a
+chi-square-4 expectation of `3.36`, almost exactly the factor of 4. The filter
+is self-consistent with respect to its own innovations. Inflating `R` would move
+NEES the wrong way.
+
+The `std`-to-MAD ratio of 5x on `v0` says the residual distribution is
+heavy-tailed rather than Gaussian: outliers are passing the gate. That argues
+for a robust cost or better association rejection, not for a larger `R`.
+
+### Two independent over-counting defects
+
+- **The cam1 row is a duplicate, not a measurement.** `FeatureFrontend` builds
+  `pixel_cam1` as `{track.pixel.x() - disparity, track.pixel.y()}`, so the
+  observed `v1` is a copy of `v0` and the rectified model predicts the two rows
+  identically. Measured `max |innovation_v0 - innovation_v1| = 1.8e-11`. The
+  stereo measurement therefore carries three independent numbers, but
+  `R = sigma^2 I_4` treats the duplicated row as a fourth, doubling the
+  information in the vertical direction. The matched `v1` from the stereo
+  matcher is computed and then discarded.
+- **Residuals are correlated in time.** Per-landmark innovation autocorrelation
+  is `0.784` at lag 1, `0.683` at lag 2, `0.245` at lag 5, and reaches zero
+  around lag 10. The same template matched against the same structure is biased
+  the same way frame after frame. For an AR(1) process that is a variance
+  inflation of `(1 + rho) / (1 - rho) ~ 8.3x`, so a 24-frame track (the measured
+  mean length) carries roughly 3 independent observations, not 24.
+
+### Order of work
+
+1. FEJ or OC-EKF. Everything else is a rounding error next to yaw NEES of 311
+   with a shrinking sigma.
+2. Drop the duplicated cam1 row to a 3-dof stereo measurement, or model the
+   correlation explicitly. Worth a factor of 2 in the vertical directions.
+3. Inflate `R` by the effective-sample-size factor, or thin per-landmark
+   updates, to stop counting ~8 correlated observations as 8 independent ones.
+4. Robust cost or association rejection for the heavy tail.
+5. Leave `R`'s nominal scale alone. It is conservative, and tightening it toward
+   the measured `0.25 px` would make consistency worse.
 
 ## Reporting Policy
 
