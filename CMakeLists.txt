@@ -2,6 +2,17 @@ cmake_minimum_required(VERSION 3.20)
 
 project(ekf_slam_cpp LANGUAGES CXX)
 
+execute_process(
+    COMMAND git rev-parse HEAD
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE EKF_SLAM_GIT_REVISION
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(NOT EKF_SLAM_GIT_REVISION)
+    set(EKF_SLAM_GIT_REVISION "unknown")
+endif()
+
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -17,6 +28,7 @@ find_package(Sophus REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs)
 
 add_library(ekf_slam_parser
+    benchmark_trace.cpp
     parser_csv.cpp
     parser.cpp
     parser_yaml.cpp
@@ -381,6 +393,13 @@ if(BUILD_TESTING)
     )
 
     gtest_discover_tests(evaluation_tests)
+
+    add_executable(benchmark_trace_tests
+        tests/benchmark_trace_test.cpp
+    )
+    target_link_libraries(benchmark_trace_tests PRIVATE ekf_slam_parser GTest::gtest_main)
+    target_compile_options(benchmark_trace_tests PRIVATE -Wall -Wextra -Werror)
+    gtest_discover_tests(benchmark_trace_tests)
 endif()
 
 add_executable(mh01_benchmark
@@ -389,4 +408,7 @@ add_executable(mh01_benchmark
 
 target_link_libraries(mh01_benchmark PRIVATE ekf_slam_parser)
 target_compile_options(mh01_benchmark PRIVATE -Wall -Wextra -Werror)
-target_compile_definitions(mh01_benchmark PRIVATE EKF_SLAM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_definitions(mh01_benchmark PRIVATE
+    EKF_SLAM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    EKF_SLAM_GIT_REVISION="${EKF_SLAM_GIT_REVISION}"
+)

@@ -25,7 +25,8 @@ stereo_matcher.hpp/cpp Row-constrained rectified stereo association
 feature_frontend.hpp/cpp Stateful track lifecycle and estimator-facing observations
 evaluation.hpp/cpp  Ground-truth association plus ATE/RPE/NEES trajectory metrics
 mh01_benchmark.cpp  Reproducible MH_01 evaluator executable; optional `[max_frames]`
-                    argument truncates the run for profiling
+                    truncates profiling runs and `--trace-dir <directory>` exports CSV traces
+benchmark_trace.hpp/cpp  Opt-in MH_01 trace writer for IMU, camera-frame, and per-observation CSVs plus run metadata
 measurement_model.hpp/cpp Pure pinhole prediction h(.) and sparse Jacobian blocks
 measurement_update.hpp/cpp Sequential per-landmark stereo EKF update and gating
 propagation.hpp/cpp Public IMU nominal-state propagation
@@ -747,6 +748,15 @@ work.
   Products such as `0.29 * 200` evaluate to `57.999999999999993`, and a plain
   `floor` dropped the final sample — which showed up as a 17x worse propagation
   error (`0.009` vs `0.0005`) that looked like an integrator bug and was not.
+- **Visualization traces are exported at the benchmark boundary, not from
+  estimator code.** `mh01_benchmark --trace-dir` records IMU propagation,
+  camera-frame prior/posterior, and per-observation innovation rows without
+  changing the filter API or normal benchmark cost. Each row carries only the
+  fixed-size 15-state robot covariance; exporting the full joint covariance at
+  every IMU sample would grow with the map and make presentation data needlessly
+  large. Metadata pins the sequence, noise setting, landmark budget, timestamp
+  unit, covariance layout, and compiled Git revision for reproducibility.
+
 ### Build and tooling
 
 - **`RelWithDebInfo` is the default build type.** Eigen depends on optimization

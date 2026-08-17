@@ -1,3 +1,4 @@
+#include "benchmark_trace.hpp"
 #include "evaluation.hpp"
 #include "feature_frontend.hpp"
 #include "image_io.hpp"
@@ -10,6 +11,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <optional>
 
 namespace {
 
@@ -21,14 +23,20 @@ int fail(std::string_view message) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    // Optional frame cap for profiling runs. Accuracy metrics are then only
-    // over the truncated prefix and are not comparable to a full-sequence run.
     std::size_t max_frames = std::numeric_limits<std::size_t>::max();
-    if (argc > 1) {
-        const std::string_view argument{argv[1]};
+    std::optional<std::filesystem::path> trace_directory;
+    for (int argument_index = 1; argument_index < argc; ++argument_index) {
+        const std::string_view argument{argv[argument_index]};
+        if (argument == "--trace-dir") {
+            if (++argument_index >= argc || trace_directory) {
+                return fail("usage: mh01_benchmark [max_frames] [--trace-dir directory]");
+            }
+            trace_directory = argv[argument_index];
+            continue;
+        }
         const auto parsed = std::from_chars(argument.data(), argument.data() + argument.size(), max_frames);
         if (parsed.ec != std::errc{} || parsed.ptr != argument.data() + argument.size() || max_frames == 0) {
-            return fail("usage: mh01_benchmark [max_frames], where max_frames is a positive integer");
+            return fail("usage: mh01_benchmark [max_frames] [--trace-dir directory]");
         }
     }
     const auto dataset = parse_dataset(std::filesystem::path{EKF_SLAM_SOURCE_DIR} / "datasets/machine_hall/MH_01_easy");
@@ -47,6 +55,12 @@ int main(int argc, char** argv) {
     SlamState state = std::move(*state_result);
     constexpr double kPixelSigma = 0.5;
     const Eigen::Matrix4d pixel_covariance = kPixelSigma * kPixelSigma * Eigen::Matrix4d::Identity();
+    std::optional<BenchmarkTraceWriter> trace;
+    if (trace_directory) {
+        auto writer = BenchmarkTraceWriter::create(*trace_directory, EKF_SLAM_GIT_REVISION, state.max_landmarks(), kPixelSigma);
+        if (!writer) return fail(writer.error());
+        trace = std::move(*writer);
+    }
     std::size_t imu_index = 0;
     TimestampNs last_imu_timestamp = initial.timestamp;
     int applied = 0, gated = 0, augmented = 0, peak_tracks = 0;
@@ -64,6 +78,13 @@ int main(int argc, char** argv) {
             const auto propagation = propagate_slam(state, measurement, dataset->imu_calibration, dt);
             if (!propagation) return fail(propagation.error());
             last_imu_timestamp = measurement.timestamp;
+            if (trace) {
+                const auto ground_truth = interpolate_ground_truth(dataset->ground_truth_states, measurement.timestamp);
+                if (const auto written = trace->write_imu(measurement.timestamp, dt, state.robot, state.robot_covariance(),
+                        ground_truth ? std::optional<GroundTruthState>{*ground_truth} : std::nullopt); !written) {
+                    return fail(written.error());
+                }
+            }
         }
         const auto decode_start = std::chrono::steady_clock::now();
         const auto cam0 = load_grayscale_png(pair.cam0_image_path);
@@ -76,6 +97,8 @@ int main(int argc, char** argv) {
         frontend_time += std::chrono::steady_clock::now() - frontend_start;
         if (!frame) return fail(frame.error());
         peak_tracks = std::max(peak_tracks, frame->active_track_count);
+        const NominalState prior = state.robot;
+        const ImuStateCovariance prior_covariance = state.robot_covariance();
         const auto update_start = std::chrono::steady_clock::now();
         const auto update = update_stereo_frame(state, frame->mapped_observations, rectification->cam0_rectified,
             rectification->cam1_rectified, pixel_covariance);
@@ -94,6 +117,17 @@ int main(int argc, char** argv) {
             ++augmented;
         }
         frontend.report_augmentation(births);
+        if (trace) {
+            const auto ground_truth = interpolate_ground_truth(dataset->ground_truth_states, pair.timestamp);
+            if (const auto observations_written = trace->write_observations(pair.timestamp, frame->mapped_observations, update->diagnostics); !observations_written) {
+                return fail(observations_written.error());
+            }
+            if (const auto camera_written = trace->write_camera(pair.timestamp, prior, prior_covariance, state.robot,
+                    state.robot_covariance(), frame->active_track_count, update->applied_count, update->gated_count,
+                    static_cast<int>(births.size()), ground_truth ? std::optional<GroundTruthState>{*ground_truth} : std::nullopt); !camera_written) {
+                return fail(camera_written.error());
+            }
+        }
         const auto removal = state.remove_landmarks(frame->dead_landmarks);
         if (!removal) return fail(removal.error());
         // EuRoC camera capture continues slightly beyond the ground-truth
