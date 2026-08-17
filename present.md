@@ -558,6 +558,104 @@ documented instead of hidden.
 against a 5,000 us budget at 200 Hz (0.04% of it). Dev machine, not Jetson;
 `RelWithDebInfo`.
 
+The frontend started as the opposite story: **110.7 ms/frame against a 50 ms
+budget at 20 Hz**, a 2.2x miss. That number alone is not interesting. Where it
+went, and what fixing it revealed, is.
+
+### Profiling the frontend — the answer was never where I looked
+
+Before measuring, my ranked guesses were the pyramidal KLT inner loop, the
+forward-backward check, and the `std::expected<double, std::string>` return type
+on `sample_bilinear` in the hottest loop in the system. Per-stage timers said
+**80% of the frontend was acquiring new features and 17% was tracking existing
+ones** — every optimization I had ranked first lived inside that 17%.
+
+Chasing that led somewhere better than a speedup. The detector was emitting ~264
+corners per frame into a 100-landmark budget, which only makes sense if tracks
+are dying almost immediately. They were, and the cause was one keyword:
+
+```cpp
+if (delta.norm() < options.convergence_px) return {estimate * scale, ...};
+```
+
+`return`, not `break`. Pyramidal KLT is a recursion — each level contributes a
+correction to the estimate handed down from above, `d(l) = 2*d(l+1) + delta(l)`
+— and this exited the whole function at whatever level converged first, scaling
+a coarse-level answer up as if it were exact. A measured **90% of calls returned
+from the coarsest level** (`L0 conv=191, L1 388, L2 1096, L3 20933`).
+
+That is a bias, not a tolerance question. Each level minimizes a *different*
+objective, because level `l` is smoothed by a cumulative kernel of variance
+`sigma_l^2 = (4^l - 1)/3` — about 4.6 px at level 3. Expanding the stationarity
+condition of the smoothed objective gives a displacement of the minimizer:
+
+```
+d*(l) - d*(0)  ~  -(1/2) sigma_l^2 * H^-1 * grad(tr Hessian(E))
+```
+
+proportional to smoothing variance and to the *third-order* structure of the
+error surface, amplified by `H^-1` — worst precisely for the weak corners near
+the eigenvalue floor. Then it gets multiplied by `2^l`. There is also a blunter
+problem: a 21x21 window at level 3 spans 168x168 source pixels, roughly a
+quarter of the frame, where a single translational model is simply false.
+
+The downstream chain: biased positions fail the 0.5 px forward-backward check ->
+tracks die after a frame or two -> the detector re-acquires every frame -> the
+acquisition-dominated profile I started out trying to optimize. **The
+acquisition cost was a symptom, not the disease.** And the filter degraded two
+ways: actual pixel error far exceeded the assumed `sigma = 0.5 px`, so `S =
+HPH^T + R` was too small and the gate rejected good measurements while
+over-weighting the rest; and tracks dying after one or two frames means almost
+no traversed baseline, so landmark depth was never refined.
+
+### Results
+
+| Metric | Before | After | |
+|---|---|---|---|
+| ATE position RMSE | 0.696915 m | 0.253809 m | 2.7x |
+| RPE translation | 0.0484806 m/s | 0.0148663 m/s | 3.3x |
+| RPE rotation | 0.00552155 rad/s | 0.00277314 rad/s | 2.0x |
+| Mean NEES (15-dof) | 217,927 | 10,357 | 21x |
+| Frontend | 110.674 ms/frame | 36.160 ms/frame | 3.1x |
+
+Frontend plus update is `44.3 ms/frame` against the 50 ms camera period, so the
+pipeline meets 20 Hz on the dev machine. Three changes got there:
+
+1. **Detector, behavior-preserving.** `57.2 -> 16.6 ms`. Gradients computed once
+   instead of ~49 times across overlapping windows, separable box sum, and
+   per-cell bounded selection replacing a full sort of ~250k candidates.
+   Verified bit-identical against a reference transcription of the original.
+2. **KLT coarse-to-fine correctness fix.** Cost 2x runtime, bought 9x prefix ATE.
+3. **Hoisting the KLT template work.** `441 x 8` samples per iteration to
+   `441 x 1`, since the template patch, gradients, and mean are invariant while
+   the iteration moves the target. Measured 8.7x per call against a predicted
+   8x — the one prediction that landed.
+
+### Lessons from the profiling itself
+
+The presentable lesson is about ordering. Reading the code produced a confident,
+specific, and wrong ranking three times running: the tracker inner loop (it was
+8.5%), the structure tensor (the sort was the larger half), and buffer
+allocation (worth 0.7 ms of 21). One attempted fix made things *worse* — bounding
+the sort by "stop when every grid cell is full," a condition unreachable because
+low-texture cells never fill. Roughly 40 lines of `steady_clock` accumulators
+settled each question in a 45-second run.
+
+Two specific habits earned their keep. **Per-call counters matter as much as
+timers**: bulk stage totals suggested unprimed stereo searches were 34x more
+expensive than primed ones, and dividing by call counts showed the real per-call
+ratio was 2.6x with volume explaining the rest — a ratio of totals is not a ratio
+of costs. And **verify the claim you keep repeating**: I asserted three times
+that the per-sample bounds checks were provably redundant given `valid_patch`.
+They were not. The margin was `half + 1` where the gradient footprint needs
+`half + 2`, so the outermost sample could land exactly where the checked sampler
+rejects. The checks were load-bearing, and making them genuinely redundant
+required tightening the margin and accepting a one-pixel border band.
+
+The honest headline is that a correctness bug was masquerading as a performance
+problem, and the performance work is what surfaced it. The system was fast
+because it was wrong.
+
 ---
 
 ## 6. Lessons learned
@@ -693,16 +791,61 @@ margin (§5).
 **If you have 20 minutes:** add the ESEKF split and why rotations force it
 (§2), the synthetic harness inversion trick (§3), and two lessons (§6).
 
-**Figures worth building:**
+**Generated visual assets:**
 
-1. Drift vs. horizon, log-y, with the reported 1-sigma band overlaid — one plot
-   carries both §1's motivation and §5's honest observation about consistency.
-2. The 15x15 `F` block structure as a labeled grid, with the five non-zero
-   blocks highlighted and the two that hand-checked tests cannot verify marked
-   in a different color.
-3. Monte Carlo deviation: correct code (~0.04) vs. each corrupted-`F` variant
-   (≥ 0.23) as a bar chart against the 0.15 threshold line.
-4. Timestep convergence on log-log axes with a reference slope-1 line.
+The complete 3,682-frame MH_01 run is traced locally (and intentionally kept
+out of Git) with:
+
+```bash
+./build/mh01_benchmark --trace-dir artifacts/mh01_trace
+python3 -m venv .plot-venv
+.plot-venv/bin/python -m pip install -r scripts/plot-requirements.txt
+.plot-venv/bin/python scripts/generate_mh01_graphs.py artifacts/mh01_trace \
+  --output-dir artifacts/mh01_graphs
+```
+
+`imu_trace.csv` records each propagated robot state, 15-state robot covariance,
+and interpolated truth. `camera_trace.csv` records the IMU prior and visual
+posterior at every stereo frame, including truth position, velocity,
+orientation, and biases. `observation_trace.csv` records pixel predictions,
+observations, innovations, Mahalanobis distances, and outcomes. `metadata.json`
+pins the sequence, initialization, noise, covariance layout, and compiled Git
+revision. The generated figures live in `artifacts/mh01_graphs/`; the plotting
+script is `scripts/generate_mh01_graphs.py`.
+
+Use the figures in this order:
+
+1. **Trajectory overlay** (`01_trajectory_overlay.png`) — establish that the
+   system ran end-to-end in the raw EuRoC world frame, then point out where the
+   estimate departs from ground truth rather than hiding it with alignment.
+2. **Kalman update in action** (`02_kalman_update_in_action.png`) — introduce
+   the prior, posterior, local truth, covariance ellipses, and correction arrow.
+   Be precise: the stereo measurement is a pixel-space constraint, not a direct
+   world-position measurement.
+3. **Position error and uncertainty** plus **camera-update effect**
+   (`03_...`, `05_...`) — show what the filter claims to know against its actual
+   error and how much each camera sweep moves position.
+4. **Innovation gating**, **pixel innovations**, and **frontend health**
+   (`06_...`, `07_...`, `12_...`, `13_...`) — show the path from a raw image
+   observation to an accepted/rejected EKF update. These are the best figures
+   for explaining that gating measures innovation consistency, not match quality
+   by itself.
+5. **Robot-state error by block** and **covariance numerical health**
+   (`11_...`, `14_...`) — distinguish accuracy failures in position, velocity,
+   attitude, and bias from a loss of positive definiteness or bad conditioning.
+6. **Real-run NEES over time** (`04_nees_over_time.png`) — use it as an
+   over-confidence diagnostic. A pointwise NEES trace is not a confidence
+   interval; the controlled Monte Carlo experiment supplies that statistical
+   claim.
+7. **Monte Carlo margin**, **integrator convergence**, and **NEES summary**
+   (`08_...`, `09_...`, `10_...`) — close with the controlled evidence: the
+   covariance test catches wrong dynamics, the integrator has measured
+   first-order behavior, and the synthetic update inconsistency is isolated to
+   attitude and biases.
+
+The 15x15 `F` block grid remains worth drawing manually for the estimator-math
+slide. It explains why the Monte Carlo margin graph matters, but it is a
+conceptual diagram rather than a dataset-derived result.
 
 **Questions to expect:**
 

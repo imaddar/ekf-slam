@@ -24,7 +24,9 @@ klt_tracker.hpp/cpp Pyramidal inverse-compositional KLT tracking
 stereo_matcher.hpp/cpp Row-constrained rectified stereo association
 feature_frontend.hpp/cpp Stateful track lifecycle and estimator-facing observations
 evaluation.hpp/cpp  Ground-truth association plus ATE/RPE/NEES trajectory metrics
-mh01_benchmark.cpp  Reproducible full-sequence MH_01 evaluator executable
+mh01_benchmark.cpp  Reproducible MH_01 evaluator executable; optional `[max_frames]`
+                    truncates profiling runs and `--trace-dir <directory>` exports CSV traces
+benchmark_trace.hpp/cpp  Opt-in MH_01 trace writer for IMU, camera-frame, and per-observation CSVs plus run metadata
 measurement_model.hpp/cpp Pure pinhole prediction h(.) and sparse Jacobian blocks
 measurement_update.hpp/cpp Sequential per-landmark stereo EKF update and gating
 propagation.hpp/cpp Public IMU nominal-state propagation
@@ -50,6 +52,8 @@ tests/synthetic_test.cpp Synthetic trajectory and IMU propagation tests
 tests/triangulation_test.cpp Stereo triangulation covariance tests
 tests/landmark_augmentation_test.cpp Landmark covariance augmentation tests
 tests/slam_integration_test.cpp End-to-end SLAM state and closed-loop filter tests
+tests/klt_tracker_test.cpp Pyramid-depth selection and border tracking
+tests/corner_detector_test.cpp Detector equivalence against a reference implementation on a real frame
 tests/euroc_frontend_test.cpp Real MH_01 rectification, tracking, and closed-loop smoke tests
 tests/evaluation_test.cpp  Ground-truth association and trajectory-metric tests
 ```
@@ -265,6 +269,9 @@ agreement between injected noise and the calibration densities.
 - `FeatureFrontend::process(cam0_raw, cam1_raw, timestamp)` — public. Rectifies
   a pair, tracks and stereo-matches features, then returns mapped observations,
   augmentation candidates, and deferred landmark removals.
+- `FeatureFrontend::stage_timings()` — public. Returns the `FrontendStageTimings`
+  wall-clock totals accumulated per stage across every processed frame, so a
+  caller can attribute frontend cost without an external profiler.
 - `SlamState::robot_landmark_covariance()` and
   `SlamState::landmark_landmark_covariance()` — public. Return active-region
   views of `P_rl` and `P_ll`; inactive landmark capacity is excluded.
@@ -742,6 +749,44 @@ work.
   Products such as `0.29 * 200` evaluate to `57.999999999999993`, and a plain
   `floor` dropped the final sample — which showed up as a 17x worse propagation
   error (`0.009` vs `0.0005`) that looked like an integrator bug and was not.
+- **Visualization traces are exported at the benchmark boundary, not from
+  estimator code.** `mh01_benchmark --trace-dir` records IMU propagation,
+  camera-frame prior/posterior, and per-observation innovation rows without
+  changing the filter API or normal benchmark cost. Each row carries only the
+  fixed-size 15-state robot covariance; exporting the full joint covariance at
+  every IMU sample would grow with the map and make presentation data needlessly
+  large. Metadata pins the sequence, noise setting, landmark budget, timestamp
+  unit, covariance layout, and compiled Git revision for reproducibility.
+
+- **The KLT patch loops sample unchecked behind a single widened bounds gate.**
+  `sample_bilinear` returns `ParseResult<double>`, which is right at the domain
+  boundary and wrong in the tracker's innermost loop, where the error string it
+  can never produce still costs a fat return on every sample.
+  `sample_bilinear_unchecked` carries the same interpolation math with the check
+  hoisted to the caller, and `sample_bilinear` delegates to it so the two cannot
+  diverge. Making that safe required widening `valid_patch` from `half + 1` to
+  `half + 2`: the patch takes central-difference gradients one pixel outside the
+  window and bilinear interpolation needs the pixel after that, so the original
+  margin did not actually cover the footprint it was guarding. The trade is a
+  one-pixel band at the image border where features are now rejected earlier.
+- **Pyramid depth is chosen per feature, not fixed.** `valid_patch` needs the
+  patch centre `window_half_size + 2` px inside the image at every level used,
+  which in level-0 terms costs `(half + 2) * 2^level` at each border. With four
+  levels and a 21x21 window that excluded the outer 96 px, 55% of a 752x480
+  frame, where a match failed on the bounds check before any iteration ran and
+  never succeeded once. `track_feature` now starts at the deepest level whose
+  footprint fits both images. The condition is monotone in level, so the deepest
+  fitting level also guarantees every finer one. Interior features are
+  unaffected; border features trade convergence range, which is what coarse
+  levels buy, for being trackable at all. A feature at the very edge of a
+  level's validity band remains marginal, because the patch only just fits and
+  iteration drift can leave the image.
+- **Per-level template quantities are computed once, not per iteration.** The
+  template patch, its gradients, and its mean do not change while the iteration
+  refines the estimate against the target, so they are built alongside the
+  Hessian, which was already computing exactly those gradients and discarding
+  them. This is what the "inverse-compositional" label on the tracker means in
+  practice; the previous form recomputed all of it on every iteration.
 
 ### Build and tooling
 
