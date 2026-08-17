@@ -11,8 +11,8 @@ is measured, why it matters, and where the value comes from.
 | Real MH_01 frontend smoke run | `tests/euroc_frontend_test.cpp` | First 30 stereo frames (1.45 s); truth-initialized, 100-landmark budget | Peak 377 tracks; 356 augmentations; 317 updates applied; 480 gated; final position error `5.81 mm` | Passing smoke test; not an ATE result |
 | Real MH_01 frontend preliminary run | `tests/euroc_frontend_test.cpp` | Full MH_01, 3,682 stereo frames; truth-initialized, 100-landmark budget | Peak 233 tracks; 24,103 augmentations; 187,726 applied and 57,964 gated updates; final position error `2.02 m`; frontend `101.2 ms/frame`, update `5.71 ms/frame` | Completes stably; misses 20 Hz budget and needs tracking/noise tuning |
 | MH_01 pixel-noise sensitivity | `tests/euroc_frontend_test.cpp` | First 100 frames; independent scalar detector-noise sweep | `sigma=0.5 px`: 1,190 gated / 2,423 applied, `2.87 cm`; `sigma=1.0 px`: 758 gated / 3,116 applied, `4.94 cm` | Neither is a calibrated model; do not tune by gate count alone |
-| MH_01 full trajectory benchmark | `mh01_benchmark.cpp` | Full 3,682-frame filter pass; 3,638 camera timestamps shared with ground truth; truth-initialized, `sigma=0.5 px`, 100-landmark budget | ATE position RMSE `0.696915 m`; 1 s RPE translation RMSE `0.0484806 m/s`; rotation RMSE `0.00552155 rad/s`; mean 15-dof NEES `217,927` | Completes, but covariance is severely over-confident; not a consistency pass |
-| MH_01 frontend stage profile | `mh01_benchmark.cpp` | Same full pass; per-stage wall clock from `FeatureFrontend::stage_timings()` | Frontend `110.7 ms/frame` against a `50 ms` budget at 20 Hz; `detect` `59.1 ms` (53.4%), `stereo_new` `29.6 ms` (26.8%), whole temporal tracking chain `19.3 ms` (17.5%) | Misses the 20 Hz budget by ~2.2x; cost is concentrated in feature acquisition |
+| MH_01 full trajectory benchmark | `mh01_benchmark.cpp` | Full 3,682-frame filter pass; 3,638 camera timestamps shared with ground truth; truth-initialized, `sigma=0.5 px`, 100-landmark budget | ATE position RMSE `0.253809 m`; 1 s RPE translation RMSE `0.0148663 m/s`; rotation RMSE `0.00277314 rad/s`; mean 15-dof NEES `10,357` | Completes; covariance still over-confident by ~700x, so not a consistency pass |
+| MH_01 frontend stage profile | `mh01_benchmark.cpp` | Same full pass; per-stage wall clock from `FeatureFrontend::stage_timings()` | Frontend `36.2 ms/frame` plus update `8.1 ms/frame` against a `50 ms` budget at 20 Hz; `detect` `16.7 ms` (46.3%), whole KLT family `17.2 ms` (47.6%) | Meets the 20 Hz budget with ~12% headroom on the dev machine; not a Jetson number |
 
 | Metric | Source | Scenario | Current value / bound | Status |
 |---|---|---|---|---|
@@ -243,101 +243,99 @@ nearest later camera sample at least one second away and reports rate-normalized
 translation and rotation RMSE. NEES uses the posterior 15-state robot covariance
 and the project error-state convention.
 
-The `0.697 m` ATE and `4.85 cm/s` translational RPE show a working offline VIO
-loop on real images, but the `217,927` mean NEES is orders of magnitude above
-the 15-dof expectation. This is a calibration/consistency failure, not an
-accuracy victory: the filter reports uncertainty far smaller than its actual
-state error. The `110.7 ms/frame` frontend also exceeds EuRoC's 50 ms camera
-period. The next work is frontend optimization and noise/linearization
-consistency work before presenting MH_01 as a reliable estimator.
+The `0.254 m` ATE and `1.49 cm/s` translational RPE come from a pipeline that
+also meets the 20 Hz budget at `44.3 ms/frame` including the update. The
+`10,357` mean NEES remains roughly 700x the 15-dof expectation, so the filter
+still reports uncertainty far smaller than its actual state error. That is a
+calibration/consistency failure and it is now the single largest open problem:
+accuracy and runtime both improved by fixing the frontend, and neither addresses
+a measurement noise model that does not describe the measurements.
 
-The earlier `113.3 ms/frame` figure divided by the 3,638 ground-truth-overlapping
-frames rather than the 3,682 frames actually processed, so it overstated
-per-frame cost by about 1%. Timing now divides by processed frames. The
-remainder of the difference is run-to-run spread. Where that time goes is broken
-down in the frontend stage profile below.
+Both numbers moved together for one reason. The pyramidal KLT was truncating
+refinement at coarse levels, which inflated feature-position error well past the
+assumed `sigma = 0.5 px`, killed tracks after a frame or two, and forced constant
+re-acquisition. Fixing it improved ATE 2.7x, RPE 3.3x, and NEES 21x while
+cutting frontend cost 3.1x. The remaining NEES gap is not explained by it, and
+should be attacked as a noise-model and linearization problem rather than a
+tracking one. History of the intermediate measurements is in the optimization
+experiments section below.
 
 ## MH_01 Frontend Stage Profile
 
 `FeatureFrontend` accumulates wall-clock totals per stage and `mh01_benchmark`
 prints them, so frontend cost is attributable without an external profiler.
-Timer overhead is roughly 20 us per frame against a 110 ms frame, and the run
-reproduces the recorded ATE and NEES exactly, so the instrumentation is not
-perturbing either timing or estimates.
+Timer overhead is roughly 20 us per frame, well under the run-to-run spread.
 
 Full MH_01, 3,682 frames, `RelWithDebInfo`, single-threaded, Apple silicon dev
-machine. PNG decode is `4.57 ms/frame` and sits outside `process`.
+machine. PNG decode is `4.17 ms/frame` and sits outside `process`; it is an
+offline-benchmark cost with no live-camera equivalent.
 
 | Stage | ms/frame | Share | Calls/frame | us/call |
 |---|---|---|---|---|
-| `detect` | 59.14 | 53.4% | 1 | 59,137 |
-| `stereo_new` | 29.63 | 26.8% | 196.7 | 151 |
-| `temporal_klt` | 9.39 | 8.5% | 110.7 | 85 |
-| `stereo_tracked` | 6.43 | 5.8% | <= 110.7 | >= 58 |
-| `forward_backward` | 3.49 | 3.2% | 110.7 | 32 |
-| `pyramid` | 1.77 | 1.6% | 2 | 885 |
-| `rectify` | 0.78 | 0.7% | 2 | 392 |
-| `bookkeeping` | 0.04 | 0.0% | — | — |
-| **total** | **110.67** | | | |
+| `detect` | 16.73 | 46.3% | 1 | 16,731 |
+| `stereo_tracked` | 4.91 | 13.6% | <= 139.3 | >= 35 |
+| `temporal_klt` | 4.63 | 12.8% | 139.3 | 33 |
+| `forward_backward` | 4.25 | 11.8% | 139.3 | 31 |
+| `stereo_new` | 3.42 | 9.5% | 190.9 | 18 |
+| `pyramid` | 1.68 | 4.7% | 2 | 842 |
+| `rectify` | 0.50 | 1.4% | 2 | 248 |
+| `bookkeeping` | 0.03 | 0.1% | -- | -- |
+| **total** | **36.16** | | | |
 
-Two facts dominate:
+Frontend plus update is `44.3 ms/frame` against the `50 ms` camera period, so
+the pipeline meets 20 Hz on the dev machine with about 12% headroom. That
+headroom will not survive the Jetson port on its own; per-track KLT is
+embarrassingly parallel and is the intended source of margin there.
 
-- **Feature acquisition is 80% of the frontend; tracking is 17%.** `detect` plus
-  `stereo_new` is `88.8 ms/frame`. The full temporal chain -- KLT, the
-  forward-backward check, and the primed stereo match -- is `19.3 ms/frame`.
-  Optimizing the tracker is close to irrelevant until acquisition is fixed.
-- **`detect` is a fixed cost that ignores demand.** It is `59.1 ms/frame`
-  whether or not features are needed, because `detect_corners` scans every pixel
-  and rebuilds a 7x7 structure tensor per pixel, recomputing each gradient about
-  49 times across overlapping windows. It also runs every frame against a
-  100-landmark budget while emitting 196.7 corners, so most of `stereo_new` is
-  matching features the filter has no room for.
-
-Per call, an unprimed stereo match costs `151 us` against `>= 58 us` for one
-primed by the previous frame's disparity. The ratio is modest; the volume is
-not. Read the two together: the acquisition path is expensive because it runs at
-full image scale on every frame regardless of need, not because any single
-search is pathological.
-
-Run-to-run spread on the same binary is about 5% (`105.3` and `110.7 ms/frame`
-on two consecutive full runs), so treat differences below that as noise.
+Cost is now split roughly evenly between detection (46%) and the four KLT call
+sites (48%). `detect` is a fixed per-frame cost that ignores demand: it scans
+the full image every frame and emits 190.9 corners into a 100-landmark budget.
+About 70% of all pixels clear `min_eigenvalue = 1e-3`, so the candidate list it
+must select from is roughly 250k entries per frame. Demand-driven detection and
+a local-maximum test before selection are the open items there, and both change
+which features the filter sees.
 
 ## Frontend Optimization Experiments (300-frame MH_01 prefix)
 
-Measured on the first 300 frames via `mh01_benchmark 300`, so accuracy figures
-are a truncated-prefix comparison against each other, not against the
-full-sequence rows above. Same machine and build as the stage profile.
+Measured with `mh01_benchmark 300`, so accuracy figures compare against each
+other, not against the full-sequence rows above. Same machine and build
+throughout.
 
 | Change | ATE (m) | RPE trans (m/s) | Mean NEES | Applied | Frontend ms/frame |
 |---|---|---|---|---|---|
 | Baseline | 0.17503 | 0.06595 | 3,583 | 4,458 | 141.4 |
 | + O(1)-per-pixel detector | 0.17503 | 0.06595 | 3,583 | 4,458 | 99.5 |
 | + KLT coarse-to-fine fix | 0.01908 | 0.00927 | 324 | 11,937 | 189.5 |
+| + hoisted KLT template work | 0.01385 | 0.00912 | 341 | 11,160 | 33.1 |
 
 **Detector rewrite is behavior-preserving.** Gradients are computed once per
 pixel rather than once per window tap, the box sum is separable, and per-cell
 bounded selection replaces a full sort over roughly 250k candidates.
 `tests/corner_detector_test.cpp` asserts identical corner positions against a
-reference transcription of the original loop, and every accuracy figure above is
-unchanged. `detect` fell from `57.2` to `16.6 ms/frame`.
+reference transcription of the original loop, and every accuracy figure is
+unchanged. The sort was the larger half of that cost, not the structure tensor.
 
-The sort was the larger half of that cost, not the structure tensor: about 70%
-of all pixels clear `min_eigenvalue = 1e-3`, so ~250k candidates were fully
-sorted each frame to select at most 288. Selection now bounds work per grid
-cell and widens only when a truncated cell ends under its cap, which keeps the
-result identical to a full sort by construction.
-
-**The KLT fix trades runtime for a large accuracy gain.** `track_feature`
+**The KLT coarse-to-fine fix trades runtime for accuracy.** `track_feature`
 returned from the whole function on convergence at any pyramid level instead of
 refining at the next finer one, so a measured 90% of calls returned a
 coarsest-level estimate scaled up by 8 (`L0 conv=191, L1 388, L2 1096, L3
 20933`). Coarse estimates failed the `0.5 px` forward-backward check, tracks
 died early, and the detector re-acquired features every frame. Correcting it
-improves prefix ATE by 9x and NEES by 11x, and applies 2.7x more measurements,
-at 2x the frontend cost because every call now runs all four levels.
+cost 2x the frontend time because every call now runs all four levels.
 
-Full-sequence numbers in the rows above predate the KLT fix and need a re-run
-before they can be compared to anything measured after it.
+**Hoisting recovers that and more.** The template patch, its gradients, and its
+mean are invariant while the iteration refines against the target, but were
+recomputed on every one of up to 30 iterations. Each iteration went from
+`441 x 8` samples to `441 x 1`, and the retained samples no longer return a
+`ParseResult`. Measured 8.7x per KLT call, against a predicted 8x.
+
+Sampling unchecked required tightening the patch margin from `half + 1` to
+`half + 2`. The original margin did **not** guarantee the gradient footprint was
+in bounds: it admits `point.x` up to just under `width - half - 1`, so the
+outermost sample can land in `(width - 1, width)`, which the checked sampler
+rejects. The per-sample checks were load-bearing, not redundant. The tighter
+margin rejects features within one pixel of the border, which is why this row
+moves the accuracy numbers at all instead of being bit-identical.
 
 ## Reporting Policy
 

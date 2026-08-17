@@ -757,6 +757,24 @@ work.
   large. Metadata pins the sequence, noise setting, landmark budget, timestamp
   unit, covariance layout, and compiled Git revision for reproducibility.
 
+- **The KLT patch loops sample unchecked behind a single widened bounds gate.**
+  `sample_bilinear` returns `ParseResult<double>`, which is right at the domain
+  boundary and wrong in the tracker's innermost loop, where the error string it
+  can never produce still costs a fat return on every sample.
+  `sample_bilinear_unchecked` carries the same interpolation math with the check
+  hoisted to the caller, and `sample_bilinear` delegates to it so the two cannot
+  diverge. Making that safe required widening `valid_patch` from `half + 1` to
+  `half + 2`: the patch takes central-difference gradients one pixel outside the
+  window and bilinear interpolation needs the pixel after that, so the original
+  margin did not actually cover the footprint it was guarding. The trade is a
+  one-pixel band at the image border where features are now rejected earlier.
+- **Per-level template quantities are computed once, not per iteration.** The
+  template patch, its gradients, and its mean do not change while the iteration
+  refines the estimate against the target, so they are built alongside the
+  Hessian, which was already computing exactly those gradients and discarding
+  them. This is what the "inverse-compositional" label on the tracker means in
+  practice; the previous form recomputed all of it on every iteration.
+
 ### Build and tooling
 
 - **`RelWithDebInfo` is the default build type.** Eigen depends on optimization
