@@ -56,7 +56,7 @@ ParseResult<FrontendFrame> FeatureFrontend::process(const GrayImage& raw0, const
         const StereoMatch stereo = match_stereo(*current0, *current1, temporal.pixel, track.disparity, options_.stereo);
         timings_.stereo_tracked += Clock::now() - stereo_start;
         if (!stereo.valid) { lost.push_back(id); continue; }
-        track.pixel = stereo.pixel_cam0; track.disparity = stereo.disparity; ++track.age;
+        track.pixel = stereo.pixel_cam0; track.pixel_cam1 = stereo.pixel_cam1; track.disparity = stereo.disparity; ++track.age;
         frame.stereo_row_residuals.push_back(stereo.pixel_cam0.y() - stereo.pixel_cam1.y());
     }
     for (LandmarkId id : lost) { if (tracks_.at(id).state == TrackState::kMapped) frame.dead_landmarks.push_back(id); tracks_.erase(id); }
@@ -71,11 +71,11 @@ ParseResult<FrontendFrame> FeatureFrontend::process(const GrayImage& raw0, const
         timings_.stereo_new += Clock::now() - match_start;
         if (!stereo.valid) continue;
         frame.stereo_row_residuals.push_back(stereo.pixel_cam0.y() - stereo.pixel_cam1.y());
-        tracks_.emplace(next_id_, Track{.id = next_id_, .pixel = corner.pixel, .disparity = stereo.disparity}); ++next_id_;
+        tracks_.emplace(next_id_, Track{.id = next_id_, .pixel = corner.pixel, .pixel_cam1 = stereo.pixel_cam1, .disparity = stereo.disparity}); ++next_id_;
     }
     std::size_t mapped = 0;
     for (const auto& [id, track] : tracks_) {
-        const StereoObservation observation{.id = id, .pixel_cam0 = track.pixel, .pixel_cam1 = {track.pixel.x() - track.disparity, track.pixel.y()}};
+        const StereoObservation observation{.id = id, .pixel_cam0 = track.pixel, .pixel_cam1 = track.pixel_cam1};
         if (track.state == TrackState::kMapped) { if (mapped++ < options_.max_mapped_landmarks) frame.mapped_observations.push_back(observation); }
         else if (track.age >= options_.min_track_age_for_mapping) frame.birth_candidates.push_back(observation);
     }

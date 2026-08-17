@@ -1,5 +1,6 @@
 datasets/
 
 /build/
+/artifacts/mh01_trace/
 
 Cargo.lock

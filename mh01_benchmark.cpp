@@ -53,6 +53,13 @@ int main(int argc, char** argv) {
     }, 1e-4 * ImuStateCovariance::Identity());
     if (!state_result) return fail(state_result.error());
     SlamState state = std::move(*state_result);
+    // Measured per-observation residual sigma is 0.25 px (MAD, so the bulk
+    // rather than the outlier tail) and per-landmark residuals autocorrelate at
+    // 0.784 at lag 1, which by the AR(1) factor (1 + rho) / (1 - rho) = 8.26
+    // argues for an effective 0.72 px. Measured, that trade is a wash: NEES
+    // improves 10% and ATE degrades 10%, because R is not the binding
+    // constraint on consistency -- unobservable-direction drift is. Left at
+    // 0.5 px and worth revisiting once FEJ lands. See BENCHMARKS.md.
     constexpr double kPixelSigma = 0.5;
     const Eigen::Matrix4d pixel_covariance = kPixelSigma * kPixelSigma * Eigen::Matrix4d::Identity();
     std::optional<BenchmarkTraceWriter> trace;

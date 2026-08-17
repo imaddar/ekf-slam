@@ -35,16 +35,19 @@ void write_state_header(std::ostream& stream, std::string_view prefix) {
 
 void write_truth(std::ostream& stream, const std::optional<GroundTruthState>& truth) {
     if (!truth) {
-        for (int index = 0; index < 10; ++index) stream << ',';
+        for (int index = 0; index < 16; ++index) stream << ',';
         return;
     }
     stream << ',' << truth->position.x() << ',' << truth->position.y() << ',' << truth->position.z();
     stream << ',' << truth->orientation.w() << ',' << truth->orientation.x() << ',' << truth->orientation.y() << ',' << truth->orientation.z();
     stream << ',' << truth->velocity.x() << ',' << truth->velocity.y() << ',' << truth->velocity.z();
+    stream << ',' << truth->accelerometer_bias.x() << ',' << truth->accelerometer_bias.y() << ',' << truth->accelerometer_bias.z();
+    stream << ',' << truth->gyroscope_bias.x() << ',' << truth->gyroscope_bias.y() << ',' << truth->gyroscope_bias.z();
 }
 
 void write_truth_header(std::ostream& stream) {
-    stream << ",truth_px,truth_py,truth_pz,truth_qw,truth_qx,truth_qy,truth_qz,truth_vx,truth_vy,truth_vz";
+    stream << ",truth_px,truth_py,truth_pz,truth_qw,truth_qx,truth_qy,truth_qz,truth_vx,truth_vy,truth_vz,"
+              "truth_bax,truth_bay,truth_baz,truth_bgx,truth_bgy,truth_bgz";
 }
 
 std::string_view outcome_name(ObservationOutcome outcome) {

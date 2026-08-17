@@ -31,7 +31,11 @@ public:
     void report_augmentation(std::span<const LandmarkId> ids);
     const FrontendStageTimings& stage_timings() const { return timings_; }
 private:
-    struct Track { LandmarkId id; Eigen::Vector2d pixel; double disparity; int age = 0, gated = 0; TrackState state = TrackState::kCandidate; };
+    // `pixel_cam1` is the matched cam1 location, not a copy of `pixel` with the
+    // disparity subtracted: its row is an independent observation of the same
+    // rectified row, and reconstructing it would hand the filter the cam0 row
+    // twice under an R that assumes four independent components.
+    struct Track { LandmarkId id; Eigen::Vector2d pixel, pixel_cam1; double disparity; int age = 0, gated = 0; TrackState state = TrackState::kCandidate; };
     StereoRectification rectification_;
     FrontendOptions options_;
     std::unordered_map<LandmarkId, Track> tracks_;

@@ -29,6 +29,7 @@ TEST(BenchmarkTraceTest, WritesReproducibleStateAndObservationRows) {
     std::string observation_contents((std::istreambuf_iterator<char>(observations)), {});
     EXPECT_NE(metadata_contents.find("test-revision"), std::string::npos);
     EXPECT_NE(camera_contents.find("prior_px"), std::string::npos);
+    EXPECT_NE(camera_contents.find("truth_bax"), std::string::npos);
     EXPECT_NE(camera_contents.find("1,2,3"), std::string::npos);
     EXPECT_NE(observation_contents.find("99,198,87,196"), std::string::npos);
     std::filesystem::remove_all(directory);

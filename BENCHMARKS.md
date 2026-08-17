@@ -409,6 +409,36 @@ for a robust cost or better association rejection, not for a larger `R`.
   inflation of `(1 + rho) / (1 - rho) ~ 8.3x`, so a 24-frame track (the measured
   mean length) carries roughly 3 independent observations, not 24.
 
+### The cheap fixes were measured, and they are a wash
+
+Predicted ~16x from removing the two over-counting defects. Measured 1.1x.
+
+| Configuration | ATE (m) | RPE trans (m/s) | Mean NEES | Gated |
+|---|---|---|---|---|
+| Before | 0.253809 | 0.0148663 | 10,357 | 11,364 |
+| Real cam1 row | 0.270093 | 0.0146450 | 11,405 | 11,354 |
+| Real cam1 row + `sigma = 0.72 px` | 0.278976 | 0.0163773 | 9,323 | 6,630 |
+
+The prediction treated the over-counting factors as if they multiply into NEES.
+They do not. NEES here is dominated by a structural linearization defect in an
+unobservable direction, and no scaling of `R` addresses it: inflating `R` slows
+the collapse of `P` but also weakens the correction, so state error grows to
+match. Both effects are roughly 10% and they cancel.
+
+The cam1 row fix is kept because it is a correctness fix independent of the
+metric: the filter was being handed the same number twice under an `R` that
+claims four independent components. The row residual is now a live diagnostic
+again rather than identically zero -- `sigma = 0.275 px` with a `-0.096 px`
+mean, so `sigma_v = 0.195 px` per camera and there is a small systematic
+vertical offset between the rectified pair worth checking against calibration.
+Innovation correlation between the two rows is `0.997`, but that is shared
+*state* error, which `S = HPH' + R` already accounts for; what matters is that
+the *noise* is now independent, and it is.
+
+`sigma = 0.72 px` is left unapplied. The derivation is sound and the measured
+trade is not worth 10% of ATE while `R` is not the binding constraint. Revisit
+after FEJ, when it may well become binding.
+
 ### Order of work
 
 1. FEJ or OC-EKF. Everything else is a rounding error next to yaw NEES of 311
