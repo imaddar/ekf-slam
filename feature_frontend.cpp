@@ -21,6 +21,8 @@ private:
 
 ParseResult<FeatureFrontend> FeatureFrontend::create(const StereoRectification& rectification, const FrontendOptions& options) {
     if (!rectification.maps || options.max_mapped_landmarks == 0 || options.min_track_age_for_mapping < 1) return std::unexpected("feature frontend: expected rectification and positive capacities");
+    if (options.max_tracks < options.max_mapped_landmarks) return std::unexpected("feature frontend: expected max_tracks to be at least max_mapped_landmarks");
+    if (options.redetect_below == 0 || options.redetect_below > options.max_tracks) return std::unexpected("feature frontend: expected redetect_below in (0, max_tracks]");
     FeatureFrontend frontend;
     frontend.rectification_ = rectification;
     frontend.options_ = options;
@@ -60,18 +62,25 @@ ParseResult<FrontendFrame> FeatureFrontend::process(const GrayImage& raw0, const
         frame.stereo_row_residuals.push_back(stereo.pixel_cam0.y() - stereo.pixel_cam1.y());
     }
     for (LandmarkId id : lost) { if (tracks_.at(id).state == TrackState::kMapped) frame.dead_landmarks.push_back(id); tracks_.erase(id); }
-    std::vector<Eigen::Vector2d> occupied; for (const auto& [_, track] : tracks_) occupied.push_back(track.pixel);
-    const auto detect_start = Clock::now();
-    const std::vector<Corner> corners = detect_corners(*image0, occupied, options_.detector);
-    timings_.detect += Clock::now() - detect_start;
-    timings_.stereo_new_calls += corners.size();
-    for (const Corner& corner : corners) {
-        const auto match_start = Clock::now();
-        const StereoMatch stereo = match_stereo(*current0, *current1, corner.pixel, 0.0, options_.stereo);
-        timings_.stereo_new += Clock::now() - match_start;
-        if (!stereo.valid) continue;
-        frame.stereo_row_residuals.push_back(stereo.pixel_cam0.y() - stereo.pixel_cam1.y());
-        tracks_.emplace(next_id_, Track{.id = next_id_, .pixel = corner.pixel, .pixel_cam1 = stereo.pixel_cam1, .disparity = stereo.disparity}); ++next_id_;
+    // Acquisition runs only once the pool has drained to the hysteresis
+    // threshold, then refills to `max_tracks`. Detection is a fixed whole-frame
+    // cost regardless of how many features it is asked for, so topping up a
+    // few dead tracks every frame pays it in full for a trickle of features.
+    if (tracks_.size() < options_.redetect_below) {
+        std::vector<Eigen::Vector2d> occupied; for (const auto& [_, track] : tracks_) occupied.push_back(track.pixel);
+        const auto detect_start = Clock::now();
+        const std::vector<Corner> corners = detect_corners(*image0, occupied, options_.detector);
+        timings_.detect += Clock::now() - detect_start;
+        for (const Corner& corner : corners) {
+            if (tracks_.size() >= options_.max_tracks) break;
+            ++timings_.stereo_new_calls;
+            const auto match_start = Clock::now();
+            const StereoMatch stereo = match_stereo(*current0, *current1, corner.pixel, 0.0, options_.stereo);
+            timings_.stereo_new += Clock::now() - match_start;
+            if (!stereo.valid) continue;
+            frame.stereo_row_residuals.push_back(stereo.pixel_cam0.y() - stereo.pixel_cam1.y());
+            tracks_.emplace(next_id_, Track{.id = next_id_, .pixel = corner.pixel, .pixel_cam1 = stereo.pixel_cam1, .disparity = stereo.disparity}); ++next_id_;
+        }
     }
     std::size_t mapped = 0;
     for (const auto& [id, track] : tracks_) {

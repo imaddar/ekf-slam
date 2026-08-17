@@ -9,7 +9,17 @@
 #include <unordered_map>
 
 enum class TrackState { kCandidate, kMapped };
-struct FrontendOptions { DetectorOptions detector{}; KltOptions temporal{}; StereoMatchOptions stereo{}; std::size_t max_mapped_landmarks = 100; int min_track_age_for_mapping = 2, max_consecutive_gated = 3; };
+// `max_tracks` bounds per-frame tracking cost, which is paid per track per
+// frame whether or not the filter can use the track. It needs headroom above
+// `max_mapped_landmarks` so mature replacements are available as tracks die.
+//
+// `redetect_below` adds hysteresis: detection is a fixed whole-frame cost that
+// does not scale with how many features it is asked for, so running it every
+// frame to top up a handful of dead tracks pays that cost for a trickle of
+// features. Letting the pool drain to `redetect_below` and then refilling to
+// `max_tracks` amortizes detection over the frames in between, without holding
+// fewer tracks on average.
+struct FrontendOptions { DetectorOptions detector{}; KltOptions temporal{}; StereoMatchOptions stereo{}; std::size_t max_mapped_landmarks = 100, max_tracks = 300, redetect_below = 200; int min_track_age_for_mapping = 2, max_consecutive_gated = 3; };
 struct FrontendFrame { TimestampNs timestamp; std::vector<StereoObservation> mapped_observations, birth_candidates; std::vector<LandmarkId> dead_landmarks; std::vector<double> stereo_row_residuals; int active_track_count = 0; };
 
 // Wall-clock totals per frontend stage, accumulated across every processed

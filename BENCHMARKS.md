@@ -11,8 +11,8 @@ is measured, why it matters, and where the value comes from.
 | Real MH_01 frontend smoke run | `tests/euroc_frontend_test.cpp` | First 30 stereo frames (1.45 s); truth-initialized, 100-landmark budget | Peak 377 tracks; 356 augmentations; 317 updates applied; 480 gated; final position error `5.81 mm` | Passing smoke test; not an ATE result |
 | Real MH_01 frontend preliminary run | `tests/euroc_frontend_test.cpp` | Full MH_01, 3,682 stereo frames; truth-initialized, 100-landmark budget | Peak 233 tracks; 24,103 augmentations; 187,726 applied and 57,964 gated updates; final position error `2.02 m`; frontend `101.2 ms/frame`, update `5.71 ms/frame` | Completes stably; misses 20 Hz budget and needs tracking/noise tuning |
 | MH_01 pixel-noise sensitivity | `tests/euroc_frontend_test.cpp` | First 100 frames; independent scalar detector-noise sweep | `sigma=0.5 px`: 1,190 gated / 2,423 applied, `2.87 cm`; `sigma=1.0 px`: 758 gated / 3,116 applied, `4.94 cm` | Neither is a calibrated model; do not tune by gate count alone |
-| MH_01 full trajectory benchmark | `mh01_benchmark.cpp` | Full 3,682-frame filter pass; 3,638 camera timestamps shared with ground truth; truth-initialized, `sigma=0.5 px`, 100-landmark budget | ATE position RMSE `0.199708 m`; 1 s RPE translation RMSE `0.0138255 m/s`; rotation RMSE `0.00237939 rad/s`; mean 15-dof NEES `7,961` | Completes; covariance still over-confident by ~530x, so not a consistency pass |
-| MH_01 frontend stage profile | `mh01_benchmark.cpp` | Same full pass; per-stage wall clock from `FeatureFrontend::stage_timings()` | Frontend `46.2 ms/frame` plus update `9.4 ms/frame` against a `50 ms` budget at 20 Hz; `detect` `15.8 ms` (34.2%), whole KLT family `28.2 ms` (61.0%) | **Over budget at `55.7 ms/frame`.** Per-feature pyramid depth recovered the frame border and 82% more tracks; the frontend now tracks 257 features per frame for a 100-landmark filter |
+| MH_01 full trajectory benchmark | `mh01_benchmark.cpp` | Full 3,682-frame filter pass; 3,638 camera timestamps shared with ground truth; truth-initialized, `sigma=0.5 px`, 100-landmark budget, 300-track pool | ATE position RMSE `0.176734 m`; 1 s RPE translation RMSE `0.0138104 m/s`; rotation RMSE `0.00243615 rad/s`; mean 15-dof NEES `6,658` | Completes; covariance still over-confident by ~440x, so not a consistency pass |
+| MH_01 frontend stage profile | `mh01_benchmark.cpp` | Same full pass; per-stage wall clock from `FeatureFrontend::stage_timings()` | Frontend `30.7 ms/frame` plus update `9.6 ms/frame` against a `50 ms` budget at 20 Hz; `detect` `7.6 ms` (24.7%), whole KLT family `21.0 ms` (68.3%) | Meets 20 Hz at `40.3 ms/frame`, ~20% headroom on the dev machine; not a Jetson number |
 
 | Metric | Source | Scenario | Current value / bound | Status |
 |---|---|---|---|---|
@@ -325,6 +325,41 @@ Full-sequence effect of per-feature pyramid depth, against the cam1-row commit:
 | Peak tracks | 301 | 547 | +82% |
 | Landmarks augmented | 10,633 | 17,714 | +67% |
 | Frontend + update (ms/frame) | 45.1 | 55.7 | **+24%, over budget** |
+
+### Bounding the track pool
+
+Tracking cost is paid per track per frame regardless of whether the filter can
+consume the track, and after the border fix the frontend was carrying 257
+features for a 100-landmark budget. A plain cap trades accuracy for time close
+to linearly, because it stops detection entirely once full and the surviving
+pool loses spatial spread:
+
+| `max_tracks` | ATE (m) | Mean NEES | Frontend + update (ms) |
+|---|---|---|---|
+| uncapped (peak 547) | 0.1997 | 7,961 | 55.7 |
+| 350 | 0.2124 | 7,750 | 53.5 |
+| 250 | 0.2407 | 8,765 | 50.2 |
+| 150 | 0.2613 | 7,553 | 44.5 |
+
+Adding hysteresis breaks that trade. Detection is a fixed whole-frame cost that
+does not scale with how many features it is asked for, so topping up a handful
+of dead tracks every frame pays it in full for a trickle of features. Draining
+to `redetect_below` and refilling to `max_tracks` amortizes it:
+
+| `max_tracks` / `redetect_below` | ATE (m) | Mean NEES | Frontend + update (ms) |
+|---|---|---|---|
+| 350 / 250 | 0.1985 | 6,826 | 45.4 |
+| **300 / 200** | **0.1767** | **6,658** | **40.3** |
+| 250 / 150 | 0.2366 | 8,382 | 36.1 |
+
+`300 / 200` beats the uncapped configuration on every axis at once -- 11% better
+ATE, 16% better NEES, and 15 ms faster -- which is the signature of removing
+work that was actively harmful rather than merely redundant. `detect` falls from
+15.9 to 7.6 ms because it now runs on a fraction of frames.
+
+Both thresholds were chosen on MH_01 alone. They are defaults tuned against one
+sequence and should be re-checked before being trusted generally; evaluation
+against the remaining EuRoC sequences is still open in `scope.md`.
 
 **Detector rewrite is behavior-preserving.** Gradients are computed once per
 pixel rather than once per window tap, the box sum is separable, and per-cell
