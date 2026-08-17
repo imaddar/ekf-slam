@@ -14,11 +14,21 @@ endif()
 
 find_package(Eigen3 REQUIRED)
 find_package(Sophus REQUIRED)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs)
 
 add_library(ekf_slam_parser
     parser_csv.cpp
     parser.cpp
     parser_yaml.cpp
+    image.cpp
+    image_io.cpp
+    rectification.cpp
+    image_pyramid.cpp
+    corner_detector.cpp
+    klt_tracker.cpp
+    stereo_matcher.cpp
+    feature_frontend.cpp
+    evaluation.cpp
     augmentation_jacobians.cpp
     landmark_augmentation.cpp
     measurement_model.cpp
@@ -39,7 +49,16 @@ target_link_libraries(ekf_slam_parser
     PUBLIC
         Eigen3::Eigen
         Sophus::Sophus
+    PRIVATE
+        ${OpenCV_LIBS}
 )
+
+# OpenCV 5 split calib3d into calib/geometry; OpenCV 4 keeps calib3d.
+if(TARGET opencv_calib)
+    target_link_libraries(ekf_slam_parser PRIVATE opencv_calib opencv_geometry)
+elseif(TARGET opencv_calib3d)
+    target_link_libraries(ekf_slam_parser PRIVATE opencv_calib3d)
+endif()
 
 target_compile_options(ekf_slam_parser
     PRIVATE
@@ -49,6 +68,10 @@ target_compile_options(ekf_slam_parser
 )
 
 include(CTest)
+
+# Loading OpenCV's runtime can exceed GoogleTest's default five-second
+# post-build discovery timeout on a cold machine. Discover just before CTest.
+set(CMAKE_GTEST_DISCOVER_TESTS_DISCOVERY_MODE PRE_TEST)
 
 if(BUILD_TESTING)
     find_package(GTest REQUIRED)
@@ -291,4 +314,55 @@ if(BUILD_TESTING)
     )
 
     gtest_discover_tests(synthetic_tests)
+
+    add_executable(euroc_frontend_tests
+        tests/euroc_frontend_test.cpp
+    )
+
+    target_link_libraries(euroc_frontend_tests
+        PRIVATE
+            ekf_slam_parser
+            GTest::gtest_main
+    )
+
+    target_compile_options(euroc_frontend_tests
+        PRIVATE
+            -Wall
+            -Wextra
+            -Werror
+    )
+
+    target_compile_definitions(euroc_frontend_tests
+        PRIVATE
+            EKF_SLAM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+
+    gtest_discover_tests(euroc_frontend_tests)
+
+    add_executable(evaluation_tests
+        tests/evaluation_test.cpp
+    )
+
+    target_link_libraries(evaluation_tests
+        PRIVATE
+            ekf_slam_parser
+            GTest::gtest_main
+    )
+
+    target_compile_options(evaluation_tests
+        PRIVATE
+            -Wall
+            -Wextra
+            -Werror
+    )
+
+    gtest_discover_tests(evaluation_tests)
 endif()
+
+add_executable(mh01_benchmark
+    mh01_benchmark.cpp
+)
+
+target_link_libraries(mh01_benchmark PRIVATE ekf_slam_parser)
+target_compile_options(mh01_benchmark PRIVATE -Wall -Wextra -Werror)
+target_compile_definitions(mh01_benchmark PRIVATE EKF_SLAM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")

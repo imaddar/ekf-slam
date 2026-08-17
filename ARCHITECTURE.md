@@ -15,6 +15,16 @@ parser.hpp          Public C++ parser API declaration
 parser.cpp          Top-level dataset loading orchestration
 parser_csv.hpp/cpp  Internal CSV parsing and stereo frame pairing
 parser_yaml.hpp/cpp Internal EuRoC calibration YAML parsing
+image.hpp/cpp       Owned grayscale image and project pixel sampling
+image_io.hpp/cpp    OpenCV-backed PNG decode behind a project-native image API
+rectification.hpp/cpp Calibrated stereo remapping and rectified pseudo-cameras
+image_pyramid.hpp/cpp Hand-written Gaussian image pyramid
+corner_detector.hpp/cpp Grid-bucketed Shi-Tomasi detection
+klt_tracker.hpp/cpp Pyramidal inverse-compositional KLT tracking
+stereo_matcher.hpp/cpp Row-constrained rectified stereo association
+feature_frontend.hpp/cpp Stateful track lifecycle and estimator-facing observations
+evaluation.hpp/cpp  Ground-truth association plus ATE/RPE/NEES trajectory metrics
+mh01_benchmark.cpp  Reproducible full-sequence MH_01 evaluator executable
 measurement_model.hpp/cpp Pure pinhole prediction h(.) and sparse Jacobian blocks
 measurement_update.hpp/cpp Sequential per-landmark stereo EKF update and gating
 propagation.hpp/cpp Public IMU nominal-state propagation
@@ -40,6 +50,8 @@ tests/synthetic_test.cpp Synthetic trajectory and IMU propagation tests
 tests/triangulation_test.cpp Stereo triangulation covariance tests
 tests/landmark_augmentation_test.cpp Landmark covariance augmentation tests
 tests/slam_integration_test.cpp End-to-end SLAM state and closed-loop filter tests
+tests/euroc_frontend_test.cpp Real MH_01 rectification, tracking, and closed-loop smoke tests
+tests/evaluation_test.cpp  Ground-truth association and trajectory-metric tests
 ```
 
 There is a public nominal ESEKF state layout, IMU-only state covariance type,
@@ -50,8 +62,8 @@ measurement model and sparse analytical Jacobian blocks for one world landmark,
 rectified stereo triangulation uncertainty, analytical augmentation Jacobians,
 metric XYZ landmark covariance augmentation, error-state injection with the
 rotation reset Jacobian, and a sequential per-landmark stereo camera update with
-chi-square gating. Feature tracking, raw EuRoC stereo
-rectification/undistortion, and filter marginalization do not exist yet. A
+chi-square gating, calibrated raw-EuRoC stereo rectification, and a stateful
+KLT feature frontend. Filter marginalization does not exist yet. A
 synthetic data harness exists for controlled pre-EuRoC validation of
 propagation, SLAM-state, and closed-loop filter behavior.
 
@@ -247,6 +259,12 @@ agreement between injected noise and the calibration densities.
 - `update_stereo_frame(state, observations, cam0, cam1, pixel_covariance, options)` —
   public. Runs the sequential per-landmark stereo update for one frame: gate
   against the prior, sweep, inject once.
+- `make_stereo_rectification(cam0_raw, cam1_raw)` — public. Derives OpenCV remap
+  tables plus distortion-free pseudo-calibrations whose extrinsics describe the
+  rotated rectified camera frames.
+- `FeatureFrontend::process(cam0_raw, cam1_raw, timestamp)` — public. Rectifies
+  a pair, tracks and stereo-matches features, then returns mapped observations,
+  augmentation candidates, and deferred landmark removals.
 - `SlamState::robot_landmark_covariance()` and
   `SlamState::landmark_landmark_covariance()` — public. Return active-region
   views of `P_rl` and `P_ll`; inactive landmark capacity is excluded.
@@ -780,15 +798,17 @@ sections above (or out of this file) once it is actually built.
   See `BENCHMARKS.md` for the full experiment set;
   `SlamClosedLoopTest.DISABLED_MonteCarloRobotNeesMeetsTheConsistencyTarget` is
   the acceptance test.
-- **Outlier rejection beyond the innovation gate.** Chi-square gating against the
-  prior is implemented. RANSAC in the frontend, robust cost functions, and
-  per-landmark health tracking remain open and are not substitutes for each
-  other: the innovation gate catches a bad match only once it disagrees with the
-  filter, which a consistent-but-wrong track will not.
-- **Feature frontend.** [scope.md](scope.md) leaves KLT vs. descriptor matching
-  open. KLT is cheaper and gives sub-pixel tracks on high-rate imagery;
-  descriptors survive larger baselines and re-detection. This choice interacts
-  with the landmark parameterization and with the Jetson budget.
+- **Feature frontend.** The implementation uses hand-written pyramidal,
+  inverse-compositional translation KLT, Shi-Tomasi corners, and row-constrained
+  stereo matching. This suits EuRoC's 20 Hz cadence and gives sub-pixel pixels
+  without putting OpenCV types at the estimator boundary. Tracks lost to blur or
+  occlusion are deliberately reborn under a fresh ID; descriptor re-detection,
+  RANSAC, and robust costs remain separate future work.
+- **Layered rejection and lifecycle.** Forward/backward KLT validation and
+  disparity bounds reject visual failures before the EKF. The existing prior
+  innovation gate is independent filter evidence; repeated gated observations
+  retire a mapped track at the following frame boundary so offsets cannot change
+  during a sweep.
 - **Initialization.** The EuRoC smoke test starts from ground truth, which a
   real system does not have. Static-start bias and gravity-direction estimation,
   or a short visual-inertial alignment, are the standard options and neither
@@ -797,6 +817,13 @@ sections above (or out of this file) once it is actually built.
   static gravity alignment from a stationary accelerometer reaches the former.
   Initialization quality is therefore a consistency lever, not just a
   convenience.
+- **Raw-frame MH_01 metrics rather than aligned scores.** `mh01_benchmark`
+  associates posterior camera-time estimates to interpolated EuRoC truth and
+  reports raw-world ATE, one-second RPE, and 15-dof NEES. A global SE(3)
+  alignment would make a conventional leaderboard score, but it would remove
+  precisely the drift this truth-initialized VIO run must expose. Frames past
+  EuRoC ground-truth coverage still run through the filter and are excluded only
+  from metric aggregation.
 - **Threading and time handling for Phase 2.** Lock-free queue vs. mutex-guarded
   buffer for IMU handoff, and how out-of-order or delayed camera frames are
   handled (buffer and reprocess, or drop). The current `propagate(...)` contract
@@ -815,7 +842,8 @@ behavior yet.
 
 ## Tests
 
-90 GoogleTest cases across eleven binaries, run through CTest:
+127 GoogleTest cases across thirteen binaries, run through CTest (125 active;
+two NEES diagnostics intentionally disabled):
 
 - `tests/parser_test.cpp` — inline YAML/CSV fixtures plus a smoke test against
   `datasets/machine_hall/MH_01_easy`.
@@ -843,6 +871,10 @@ behavior yet.
   insertion, stable allocation, PSD checks, timing capture, and compaction.
 - `tests/synthetic_test.cpp` — the synthetic harness, and propagation against
   analytic truth up to the headline fully excited case.
+- `tests/euroc_frontend_test.cpp` — real MH_01 rectification/tracking and a
+  short closed-loop image measurement smoke run.
+- `tests/evaluation_test.cpp` — ground-truth interpolation plus analytical
+  ATE, RPE, and NEES metric cases.
 
 Metric values and the reasoning behind each tolerance live in
 [BENCHMARKS.md](BENCHMARKS.md).

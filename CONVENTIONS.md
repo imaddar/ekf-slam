@@ -532,3 +532,35 @@ supplying a mathematically valid covariance column.
 Batch landmark removal compacts survivors and rebuilds the ID registry. It is a
 moment-form covariance row/column deletion and copy operation, not a
 free-list-based storage policy.
+
+## 17. Camera Frontend Conventions
+
+Frontend pixels are rectified pixel-centre coordinates: `(0, 0)` is the centre
+of the top-left sample and valid image bounds are half-open. Raw EuRoC images
+are never passed to triangulation or the measurement update.
+
+`stereoRectify` receives `T_C1C0 = T_BC1^-1 T_BC0`, which maps OpenCV's first
+camera frame into its second. Its output rotation maps raw camera coordinates to
+rectified coordinates, so the pseudo-camera transform is
+`T_BC' = T_BC * blockdiag(R_C'C^T, 1)`. Track IDs are monotonic, never reused,
+and are resolved to state offsets only inside the update. Landmark removal is
+deferred until after the complete frame update/augmentation sequence.
+
+## 18. Real-Trajectory Evaluation Conventions
+
+ATE is raw EuRoC-world position RMSE at camera timestamps; it has no SE(3)
+alignment because MH_01 evaluation starts from EuRoC ground truth and an
+alignment would conceal drift. Ground truth is linearly interpolated for
+position, velocity, and biases, and quaternion-slerped for orientation.
+
+One-second RPE compares each camera pose with the first later camera pose at or
+after the requested interval. Translation is expressed in the first body frame;
+rotation is the logarithm of the relative-rotation discrepancy. Both are divided
+by the actual pair interval before their RMSE is taken, so non-exact camera
+spacing does not bias the result.
+
+For robot NEES, the error is truth minus estimate for additive quantities and
+`Log(R_WB_est^-1 R_WB_truth)` for the right/local orientation block. It is
+evaluated against the posterior 15x15 robot covariance at each associated camera
+timestamp. Camera samples outside ground-truth coverage are excluded from
+metrics, but not from the filter run.

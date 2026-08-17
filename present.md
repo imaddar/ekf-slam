@@ -3,16 +3,14 @@
 Presentation material for this project. Follows the standard deep-dive outline:
 problem, approach, implementation, metrics, results, lessons, contribution.
 
-**Status as of 2026-08-14.** Implemented: EuRoC dataset parser, nominal ESEKF
-state, joint covariance propagation, metric XYZ stereo geometry, a synthetic
-ground-truth harness, metric XYZ augmentation Jacobians, anisotropic rectified
-stereo triangulation covariance, metric XYZ state augmentation, analytical
-camera measurement Jacobian blocks, and 90 tests. Not
-implemented: raw EuRoC stereo undistortion/rectification, camera measurement
-update, ATE/RPE/NEES evaluation, ROS 2, Jetson deployment. Every number below is
-measured; nothing is projected. Keep that boundary explicit when presenting —
-the strongest thing to show right now is *verification methodology on a
-half-built filter*, not a finished SLAM system.
+**Status as of 2026-08-16.** Implemented: EuRoC dataset parser, nominal ESEKF
+state, joint covariance propagation, rectified stereo frontend, metric XYZ
+landmark augmentation, sequential camera update, and reproducible MH_01
+ATE/RPE/NEES evaluation. Not implemented: marginalization, FEJ/OC-EKF
+consistency treatment, ROS 2, Jetson deployment, and the remaining EuRoC
+sequences. Every number below is measured; nothing is projected. Keep the
+boundary explicit when presenting: MH_01 runs end-to-end, but their NEES proves
+the present covariance is badly over-confident.
 
 ---
 

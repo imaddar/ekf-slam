@@ -8,6 +8,13 @@ is measured, why it matters, and where the value comes from.
 
 | Metric | Source | Scenario | Current value / bound | Status |
 |---|---|---|---|---|
+| Real MH_01 frontend smoke run | `tests/euroc_frontend_test.cpp` | First 30 stereo frames (1.45 s); truth-initialized, 100-landmark budget | Peak 377 tracks; 356 augmentations; 317 updates applied; 480 gated; final position error `5.81 mm` | Passing smoke test; not an ATE result |
+| Real MH_01 frontend preliminary run | `tests/euroc_frontend_test.cpp` | Full MH_01, 3,682 stereo frames; truth-initialized, 100-landmark budget | Peak 233 tracks; 24,103 augmentations; 187,726 applied and 57,964 gated updates; final position error `2.02 m`; frontend `101.2 ms/frame`, update `5.71 ms/frame` | Completes stably; misses 20 Hz budget and needs tracking/noise tuning |
+| MH_01 pixel-noise sensitivity | `tests/euroc_frontend_test.cpp` | First 100 frames; independent scalar detector-noise sweep | `sigma=0.5 px`: 1,190 gated / 2,423 applied, `2.87 cm`; `sigma=1.0 px`: 758 gated / 3,116 applied, `4.94 cm` | Neither is a calibrated model; do not tune by gate count alone |
+| MH_01 full trajectory benchmark | `mh01_benchmark.cpp` | Full 3,682-frame filter pass; 3,638 camera timestamps shared with ground truth; truth-initialized, `sigma=0.5 px`, 100-landmark budget | ATE position RMSE `0.696915 m`; 1 s RPE translation RMSE `0.0484806 m/s`; rotation RMSE `0.00552155 rad/s`; mean 15-dof NEES `217,927` | Completes, but covariance is severely over-confident; not a consistency pass |
+
+| Metric | Source | Scenario | Current value / bound | Status |
+|---|---|---|---|---|
 | Synthetic IMU timestamp spacing | `tests/synthetic_test.cpp` | 200 Hz, 0.02 s | 5,000,000 ns between samples | Passing |
 | Sample-grid retention | `tests/synthetic_test.cpp` | 200 Hz, 0.29 s (`0.29 * 200` is not exactly representable) | 59 samples, last at 290,000,000 ns | Passing |
 | Sample-grid truncation | `tests/synthetic_test.cpp` | 200 Hz, 0.0071 s | 2 samples, last at 5,000,000 ns | Passing |
@@ -29,6 +36,7 @@ is measured, why it matters, and where the value comes from.
 | Seeded IMU noise reproducibility | `tests/synthetic_test.cpp` | Explicit IMU noise seed | Same seed reproduces samples; noise differs from noiseless output | Passing |
 | Injected noise vs. calibration | `tests/synthetic_test.cpp` | 200 Hz, 100 s, densities `0.01` and `0.002` | Residual stddev within 5% of `density * sqrt(rate)` | Passing |
 | Seeded pixel noise reproducibility | `tests/synthetic_test.cpp` | Explicit pixel noise seed | Same seed reproduces observations; noise differs from noiseless output | Passing |
+
 | Stereo triangulation covariance | `tests/triangulation_test.cpp` | 0.2 m baseline, 0.1 px independent pixel noise | Symmetric PSD; principal axis aligns with viewing ray; Monte Carlo covariance within 3% | Passing |
 | Stereo uncertainty range scaling | `tests/triangulation_test.cpp` | 5 m and 10 m depth | Depth standard deviation ratio 4; lateral standard deviation ratio 2 | Passing |
 | Landmark augmentation integration | `tests/landmark_augmentation_test.cpp`, `tests/slam_integration_test.cpp` | Dense robot covariance, 5 landmarks, fully excited 200 Hz trajectory | Symmetric PSD active covariance; stable allocation through add/propagate/remove | Passing |
@@ -222,6 +230,25 @@ cannot silently worsen. Loosening that ceiling to make a change pass would be
 hiding a defect; tightening it to `16.56` is the goal.
 `SlamClosedLoopTest.DISABLED_NeesDiagnosticSweep` reproduces the horizon and gate
 experiments above.
+
+## MH_01_easy Results Writeup
+
+`mh01_benchmark` runs the complete image/IMU stream and evaluates only the
+3,638 camera timestamps overlapping EuRoC ground truth; all 3,682 frames still
+reach the filter. ATE is raw world-frame position RMSE, deliberately without
+trajectory alignment because the run is initialized in EuRoC's world frame and
+alignment would hide accumulated drift. RPE compares relative poses over the
+nearest later camera sample at least one second away and reports rate-normalized
+translation and rotation RMSE. NEES uses the posterior 15-state robot covariance
+and the project error-state convention.
+
+The `0.697 m` ATE and `4.85 cm/s` translational RPE show a working offline VIO
+loop on real images, but the `217,927` mean NEES is orders of magnitude above
+the 15-dof expectation. This is a calibration/consistency failure, not an
+accuracy victory: the filter reports uncertainty far smaller than its actual
+state error. The `113.3 ms/frame` frontend also exceeds EuRoC's 50 ms camera
+period. The next work is frontend optimization and noise/linearization
+consistency work before presenting MH_01 as a reliable estimator.
 
 ## Reporting Policy
 

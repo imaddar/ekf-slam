@@ -48,18 +48,19 @@ Single-threaded, runs against recorded EuRoC sequences. Deliverable: ATE/RPE/NEE
 - [x] Monte Carlo covariance consistency check and EuRoC propagation smoke test
 
 #### Week 6–8: Camera Measurement Update
-- [ ] Feature detection and tracking (decide: KLT vs descriptor-based)
+- [x] Feature detection and tracking (hand-written pyramidal KLT)
 - [x] Metric XYZ landmark initialization from rectified stereo triangulation
-- [ ] Raw EuRoC stereo undistortion/rectification before landmark initialization
+- [x] Raw EuRoC stereo undistortion/rectification before landmark initialization
 - [x] EKF update step (sequential per-landmark stereo, chi-square gated)
 - [ ] Landmark marginalization
 
 #### Week 9–10: Benchmarking
-- [ ] ATE (Absolute Trajectory Error) computation
-- [ ] RPE (Relative Pose Error) computation
-- [ ] NEES (Normalized Estimation Error Squared)
-- [ ] Evaluation against EuRoC sequences (MH_01 through V2_03)
-- [ ] Results writeup
+- [x] ATE (Absolute Trajectory Error) computation
+- [x] RPE (Relative Pose Error) computation
+- [x] NEES (Normalized Estimation Error Squared)
+- [x] Evaluation against EuRoC MH_01_easy
+- [ ] Evaluation against remaining EuRoC sequences (MH_02 through V2_03)
+- [x] Results writeup (MH_01_easy)
 
 ---
 
