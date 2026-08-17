@@ -791,23 +791,61 @@ margin (§5).
 **If you have 20 minutes:** add the ESEKF split and why rotations force it
 (§2), the synthetic harness inversion trick (§3), and two lessons (§6).
 
-**Figures worth building:**
+**Generated visual assets:**
 
-The full MH_01 run can export reproducible visualization traces with
-`mh01_benchmark --trace-dir <directory>`. `imu_trace.csv` records each IMU
-posterior robot state and 15-state covariance; `camera_trace.csv` records the
-prior and posterior around each visual update; `observation_trace.csv` records
-pixel predictions, observations, innovations, gate distances, and outcomes.
-`metadata.json` captures the run configuration and compiled Git revision.
+The complete 3,682-frame MH_01 run is traced locally (and intentionally kept
+out of Git) with:
 
-1. Drift vs. horizon, log-y, with the reported 1-sigma band overlaid — one plot
-   carries both §1's motivation and §5's honest observation about consistency.
-2. The 15x15 `F` block structure as a labeled grid, with the five non-zero
-   blocks highlighted and the two that hand-checked tests cannot verify marked
-   in a different color.
-3. Monte Carlo deviation: correct code (~0.04) vs. each corrupted-`F` variant
-   (≥ 0.23) as a bar chart against the 0.15 threshold line.
-4. Timestep convergence on log-log axes with a reference slope-1 line.
+```bash
+./build/mh01_benchmark --trace-dir artifacts/mh01_trace
+python3 -m venv .plot-venv
+.plot-venv/bin/python -m pip install -r scripts/plot-requirements.txt
+.plot-venv/bin/python scripts/generate_mh01_graphs.py artifacts/mh01_trace \
+  --output-dir artifacts/mh01_graphs
+```
+
+`imu_trace.csv` records each propagated robot state, 15-state robot covariance,
+and interpolated truth. `camera_trace.csv` records the IMU prior and visual
+posterior at every stereo frame, including truth position, velocity,
+orientation, and biases. `observation_trace.csv` records pixel predictions,
+observations, innovations, Mahalanobis distances, and outcomes. `metadata.json`
+pins the sequence, initialization, noise, covariance layout, and compiled Git
+revision. The generated figures live in `artifacts/mh01_graphs/`; the plotting
+script is `scripts/generate_mh01_graphs.py`.
+
+Use the figures in this order:
+
+1. **Trajectory overlay** (`01_trajectory_overlay.png`) — establish that the
+   system ran end-to-end in the raw EuRoC world frame, then point out where the
+   estimate departs from ground truth rather than hiding it with alignment.
+2. **Kalman update in action** (`02_kalman_update_in_action.png`) — introduce
+   the prior, posterior, local truth, covariance ellipses, and correction arrow.
+   Be precise: the stereo measurement is a pixel-space constraint, not a direct
+   world-position measurement.
+3. **Position error and uncertainty** plus **camera-update effect**
+   (`03_...`, `05_...`) — show what the filter claims to know against its actual
+   error and how much each camera sweep moves position.
+4. **Innovation gating**, **pixel innovations**, and **frontend health**
+   (`06_...`, `07_...`, `12_...`, `13_...`) — show the path from a raw image
+   observation to an accepted/rejected EKF update. These are the best figures
+   for explaining that gating measures innovation consistency, not match quality
+   by itself.
+5. **Robot-state error by block** and **covariance numerical health**
+   (`11_...`, `14_...`) — distinguish accuracy failures in position, velocity,
+   attitude, and bias from a loss of positive definiteness or bad conditioning.
+6. **Real-run NEES over time** (`04_nees_over_time.png`) — use it as an
+   over-confidence diagnostic. A pointwise NEES trace is not a confidence
+   interval; the controlled Monte Carlo experiment supplies that statistical
+   claim.
+7. **Monte Carlo margin**, **integrator convergence**, and **NEES summary**
+   (`08_...`, `09_...`, `10_...`) — close with the controlled evidence: the
+   covariance test catches wrong dynamics, the integrator has measured
+   first-order behavior, and the synthetic update inconsistency is isolated to
+   attitude and biases.
+
+The 15x15 `F` block grid remains worth drawing manually for the estimator-math
+slide. It explains why the Monte Carlo margin graph matters, but it is a
+conceptual diagram rather than a dataset-derived result.
 
 **Questions to expect:**
 

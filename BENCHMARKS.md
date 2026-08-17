@@ -451,6 +451,57 @@ after FEJ, when it may well become binding.
 5. Leave `R`'s nominal scale alone. It is conservative, and tightening it toward
    the measured `0.25 px` would make consistency worse.
 
+## The Unmatchable Border
+
+Investigating why the frontend flatlines at 22 tracks for 25 s found a
+structural defect that is present on every frame, not just the static one.
+
+`valid_patch` requires the patch centre to sit `window_half_size + 2 = 12` px
+inside the image *at every pyramid level*. The coarsest of 4 levels is 94x60,
+so the centre must lie in `[12, 82) x [12, 48)` there. Scaled back by 8, the
+level-0 feature must lie in `[96, 656) x [96, 384)` -- a 560x288 box, **44.7% of
+a 752x480 frame**. Everything outside is geometrically impossible to match, and
+fails deterministically at the first level before any iteration runs.
+
+Measured over 900 frames, 262,935 stereo attempts:
+
+| | Count | Note |
+|---|---|---|
+| Inside the box | 121,756 | 46.3% of attempts |
+| Outside the box | 141,179 | 53.7% |
+| Successful matches | 31,686 | **all inside**; `ok_outside = 0` |
+| `kOutOfBounds` outside | 141,179 | 100% of outside attempts |
+| `kOutOfBounds` inside | 32,857 | drifted out during iteration |
+
+Not one successful match has ever come from outside the box. Two consequences:
+
+- **Cost.** 157 doomed stereo searches per frame at ~18 us each is `2.8 ms`, or
+  82% of the `stereo_new` stage, spent rediscovering the same impossibility.
+- **The static-window trap.** `detect_corners` buckets by grid cell and fills
+  cells that look unoccupied. The dead border is *always* unoccupied, because
+  nothing can ever track there, so it permanently attracts the per-cell
+  detection budget. During the static window the detector proposes the same 267
+  corners every frame, ~245 of them unmatchable, and the map cannot grow: tracks
+  sit at exactly 22 with zero births and zero deaths for 25 seconds. This is the
+  feedback trap, not a coincidence of the vehicle being still -- the vehicle
+  being still just removes the churn that normally hides it.
+
+The static window matters because it is where the damage is set up: attitude
+error grows from 2 to 25 mrad while the vehicle sits at `0.0027 m/s` mean speed
+with only 22 landmarks, and 25 mrad of yaw error times ~10 m of subsequent
+travel is the `0.25 m` position jump that appears the moment motion resumes.
+
+Fix options, in increasing order of how much field of view they keep:
+
+1. Restrict detection to the matchable box. Cheapest, recovers the 2.8 ms, but
+   formalizes the loss of 55% of the frame.
+2. Shrink `window_half_size`. `half = 6` widens the box to 63% of the frame.
+3. Drop to 3 pyramid levels: 72.7% of the frame, at the cost of the coarse
+   level that catches large motion.
+4. Choose the pyramid depth per feature so the patch fits at the coarsest level
+   used. Keeps the full frame; a border feature simply tracks with fewer levels.
+   This is the principled fix and does not trade anything away.
+
 ## Reporting Policy
 
 - Keep deterministic synthetic metrics separate from EuRoC metrics.

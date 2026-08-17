@@ -1,6 +1,7 @@
 datasets/
 
 /build/
+/.plot-venv/
 /artifacts/mh01_trace/
 
 Cargo.lock
