@@ -31,11 +31,29 @@ KltResult track_feature(const ImagePyramid& from, const ImagePyramid& to, const 
                         const Eigen::Vector2d& initial_guess, const KltOptions& options) {
     if (from.levels.empty() || from.levels.size() != to.levels.size()) return {initial_guess, KltStatus::kDiverged};
     thread_local TemplatePatch patch;
-    Eigen::Vector2d estimate = initial_guess / static_cast<double>(1 << (static_cast<int>(from.levels.size()) - 1));
-    for (int level = static_cast<int>(from.levels.size()) - 1; level >= 0; --level) {
+    // Start at the deepest level whose patch footprint still fits. The margin is
+    // a constant number of pixels at each level, so in level-0 terms it costs
+    // `(half + 2) * 2^level` at every border -- with 4 levels and a 21x21 window
+    // that is 96 px, excluding 55% of a 752x480 frame where a match is
+    // impossible rather than merely hard. The condition is monotone in level
+    // (coarser is strictly tighter), so the deepest fitting level also
+    // guarantees every finer one, and a border feature tracks with fewer levels
+    // instead of failing before its first iteration. Interior features are
+    // unaffected and still start at the top.
+    int start_level = 0;
+    for (int level = static_cast<int>(from.levels.size()) - 1; level > 0; --level) {
+        const double scale = static_cast<double>(1 << level);
+        if (valid_patch(from.levels[level], from_pixel / scale, options.window_half_size)
+            && valid_patch(to.levels[level], initial_guess / scale, options.window_half_size)) {
+            start_level = level;
+            break;
+        }
+    }
+    Eigen::Vector2d estimate = initial_guess / static_cast<double>(1 << start_level);
+    for (int level = start_level; level >= 0; --level) {
         const double scale = static_cast<double>(1 << level);
         const Eigen::Vector2d template_point = from_pixel / scale;
-        if (level != static_cast<int>(from.levels.size()) - 1) estimate *= 2.0;
+        if (level != start_level) estimate *= 2.0;
         const GrayImage& template_image = from.levels[level];
         const GrayImage& target_image = to.levels[level];
         if (!valid_patch(template_image, template_point, options.window_half_size)

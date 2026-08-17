@@ -1,5 +1,5 @@
 # Fdb version 4
-["pdflatex"] 1786944572 "presentation/ekf_slam_deep_dive.tex" "output/pdf/ekf_slam_deep_dive.pdf" "ekf_slam_deep_dive" 1786944577 0
+["pdflatex"] 1786944661 "presentation/ekf_slam_deep_dive.tex" "output/pdf/ekf_slam_deep_dive.pdf" "ekf_slam_deep_dive" 1786944666 0
   "/usr/local/texlive/2023/texmf-dist/fonts/enc/dvips/lm/lm-ec.enc" 1254269338 2375 baa924870cfb487815765f9094cf3728 ""
   "/usr/local/texlive/2023/texmf-dist/fonts/enc/dvips/lm/lm-mathex.enc" 1202520719 3486 c7eadf5dcc57b3b2d11736679f6636ba ""
   "/usr/local/texlive/2023/texmf-dist/fonts/enc/dvips/lm/lm-mathit.enc" 1202520719 2405 5dcf2c1b967ee25cc46c58cd52244aed ""
@@ -286,10 +286,10 @@
   "artifacts/mh01_graphs//12_gate_distance_over_time.png" 1786944269 692472 d1e8805c2aa024b71ceb0d5e86c4fc0e ""
   "artifacts/mh01_graphs//13_frontend_health.png" 1786944270 291564 3fca3bbc73abd7bc2cd7350347bf75de ""
   "artifacts/mh01_graphs//14_covariance_numerical_health.png" 1786944270 95937 c7a4a077acfabeb1736c88f5df72d62b ""
-  "output/pdf/ekf_slam_deep_dive.aux" 1786944577 8425 fd0041f2897f5617284fc178e72ffa74 "pdflatex"
-  "output/pdf/ekf_slam_deep_dive.nav" 1786944577 5295 eca721cfff20d890858a299aa24bd759 "pdflatex"
-  "output/pdf/ekf_slam_deep_dive.out" 1786944577 947 f69fa4cf13abd3307141d253f8317c28 "pdflatex"
-  "presentation/ekf_slam_deep_dive.tex" 1786944564 24700 241e7cd4b6a734f4b7867e7ca75895ea ""
+  "output/pdf/ekf_slam_deep_dive.aux" 1786944666 8425 fd0041f2897f5617284fc178e72ffa74 "pdflatex"
+  "output/pdf/ekf_slam_deep_dive.nav" 1786944666 5295 eca721cfff20d890858a299aa24bd759 "pdflatex"
+  "output/pdf/ekf_slam_deep_dive.out" 1786944666 947 f69fa4cf13abd3307141d253f8317c28 "pdflatex"
+  "presentation/ekf_slam_deep_dive.tex" 1786944650 24685 12e3803fbf53737f05d71ec39028a527 ""
   (generated)
   "output/pdf/ekf_slam_deep_dive.aux"
   "output/pdf/ekf_slam_deep_dive.log"

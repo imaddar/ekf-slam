@@ -11,8 +11,8 @@ is measured, why it matters, and where the value comes from.
 | Real MH_01 frontend smoke run | `tests/euroc_frontend_test.cpp` | First 30 stereo frames (1.45 s); truth-initialized, 100-landmark budget | Peak 377 tracks; 356 augmentations; 317 updates applied; 480 gated; final position error `5.81 mm` | Passing smoke test; not an ATE result |
 | Real MH_01 frontend preliminary run | `tests/euroc_frontend_test.cpp` | Full MH_01, 3,682 stereo frames; truth-initialized, 100-landmark budget | Peak 233 tracks; 24,103 augmentations; 187,726 applied and 57,964 gated updates; final position error `2.02 m`; frontend `101.2 ms/frame`, update `5.71 ms/frame` | Completes stably; misses 20 Hz budget and needs tracking/noise tuning |
 | MH_01 pixel-noise sensitivity | `tests/euroc_frontend_test.cpp` | First 100 frames; independent scalar detector-noise sweep | `sigma=0.5 px`: 1,190 gated / 2,423 applied, `2.87 cm`; `sigma=1.0 px`: 758 gated / 3,116 applied, `4.94 cm` | Neither is a calibrated model; do not tune by gate count alone |
-| MH_01 full trajectory benchmark | `mh01_benchmark.cpp` | Full 3,682-frame filter pass; 3,638 camera timestamps shared with ground truth; truth-initialized, `sigma=0.5 px`, 100-landmark budget | ATE position RMSE `0.253809 m`; 1 s RPE translation RMSE `0.0148663 m/s`; rotation RMSE `0.00277314 rad/s`; mean 15-dof NEES `10,357` | Completes; covariance still over-confident by ~700x, so not a consistency pass |
-| MH_01 frontend stage profile | `mh01_benchmark.cpp` | Same full pass; per-stage wall clock from `FeatureFrontend::stage_timings()` | Frontend `36.2 ms/frame` plus update `8.1 ms/frame` against a `50 ms` budget at 20 Hz; `detect` `16.7 ms` (46.3%), whole KLT family `17.2 ms` (47.6%) | Meets the 20 Hz budget with ~12% headroom on the dev machine; not a Jetson number |
+| MH_01 full trajectory benchmark | `mh01_benchmark.cpp` | Full 3,682-frame filter pass; 3,638 camera timestamps shared with ground truth; truth-initialized, `sigma=0.5 px`, 100-landmark budget | ATE position RMSE `0.199708 m`; 1 s RPE translation RMSE `0.0138255 m/s`; rotation RMSE `0.00237939 rad/s`; mean 15-dof NEES `7,961` | Completes; covariance still over-confident by ~530x, so not a consistency pass |
+| MH_01 frontend stage profile | `mh01_benchmark.cpp` | Same full pass; per-stage wall clock from `FeatureFrontend::stage_timings()` | Frontend `46.2 ms/frame` plus update `9.4 ms/frame` against a `50 ms` budget at 20 Hz; `detect` `15.8 ms` (34.2%), whole KLT family `28.2 ms` (61.0%) | **Over budget at `55.7 ms/frame`.** Per-feature pyramid depth recovered the frame border and 82% more tracks; the frontend now tracks 257 features per frame for a 100-landmark filter |
 
 | Metric | Source | Scenario | Current value / bound | Status |
 |---|---|---|---|---|
@@ -314,6 +314,18 @@ throughout.
 | + KLT coarse-to-fine fix | 0.01908 | 0.00927 | 324 | 11,937 | 189.5 |
 | + hoisted KLT template work | 0.01385 | 0.00912 | 341 | 11,160 | 33.1 |
 
+Full-sequence effect of per-feature pyramid depth, against the cam1-row commit:
+
+| Metric | Before | After | |
+|---|---|---|---|
+| ATE (m) | 0.270093 | 0.199708 | -26% |
+| RPE translation (m/s) | 0.0146450 | 0.0138255 | -6% |
+| RPE rotation (rad/s) | 0.0028025 | 0.0023794 | -15% |
+| Mean NEES | 11,405 | 7,961 | -30% |
+| Peak tracks | 301 | 547 | +82% |
+| Landmarks augmented | 10,633 | 17,714 | +67% |
+| Frontend + update (ms/frame) | 45.1 | 55.7 | **+24%, over budget** |
+
 **Detector rewrite is behavior-preserving.** Gradients are computed once per
 pixel rather than once per window tap, the box sum is separable, and per-cell
 bounded selection replaces a full sort over roughly 250k candidates.
@@ -475,8 +487,15 @@ Measured over 900 frames, 262,935 stereo attempts:
 
 Not one successful match has ever come from outside the box. Two consequences:
 
-- **Cost.** 157 doomed stereo searches per frame at ~18 us each is `2.8 ms`, or
-  82% of the `stereo_new` stage, spent rediscovering the same impossibility.
+- **Lost coverage, not lost time.** An earlier version of this section claimed
+  the doomed searches cost `2.8 ms/frame`, by multiplying 157 calls by the
+  `17.9 us` stage average. That is wrong, and it is the same error this file
+  already warns about: a doomed call fails the bounds check at the coarsest
+  level before any iteration runs, so it is far cheaper than the average call,
+  not equal to it. Fixing the defect *raised* `stereo_new` from `3.42` to
+  `6.22 ms/frame` on fewer calls (191 to 115) at higher cost each (`17.9` to
+  `53.9 us`), which is what confirms the failures were nearly free. The border
+  cost accuracy, not throughput.
 - **The static-window trap.** `detect_corners` buckets by grid cell and fills
   cells that look unoccupied. The dead border is *always* unoccupied, because
   nothing can ever track there, so it permanently attracts the per-cell

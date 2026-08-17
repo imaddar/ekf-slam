@@ -327,6 +327,25 @@ if(BUILD_TESTING)
 
     gtest_discover_tests(synthetic_tests)
 
+    add_executable(klt_tracker_tests
+        tests/klt_tracker_test.cpp
+    )
+
+    target_link_libraries(klt_tracker_tests
+        PRIVATE
+            ekf_slam_parser
+            GTest::gtest_main
+    )
+
+    target_compile_options(klt_tracker_tests
+        PRIVATE
+            -Wall
+            -Wextra
+            -Werror
+    )
+
+    gtest_discover_tests(klt_tracker_tests)
+
     add_executable(corner_detector_tests
         tests/corner_detector_test.cpp
     )

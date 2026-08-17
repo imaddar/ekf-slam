@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.25 (TeX Live 2023) (preloaded format=pdflatex 2023.9.4)  16 AUG 2026 23:29
+This is pdfTeX, Version 3.141592653-2.6-1.40.25 (TeX Live 2023) (preloaded format=pdflatex 2023.9.4)  16 AUG 2026 23:31
 entering extended mode
  restricted \write18 enabled.
  file:line:error style messages enabled.
@@ -1077,128 +1077,128 @@ LaTeX Font Info:    Font shape `T1/lmss/m/it' in size <10> not available
 ] [10
 
 ]
-<artifacts/mh01_graphs//08_covariance_monte_carlo_margin.png, id=199, 570.276pt
+<artifacts/mh01_graphs//08_covariance_monte_carlo_margin.png, id=211, 570.276pt
  x 337.698pt>
 File: artifacts/mh01_graphs//08_covariance_monte_carlo_margin.png Graphic file 
 (type png)
 <use artifacts/mh01_graphs//08_covariance_monte_carlo_margin.png>
 Package pdftex.def Info: artifacts/mh01_graphs//08_covariance_monte_carlo_margi
-n.png  used on input line 235.
+n.png  used on input line 237.
 (pdftex.def)             Requested size: 262.44327pt x 155.40994pt.
  [11
 
  <./artifacts/mh01_graphs//08_covariance_monte_carlo_margin.png>]
-<artifacts/mh01_graphs//09_integrator_convergence.png, id=208, 497.0205pt x 349
+<artifacts/mh01_graphs//09_integrator_convergence.png, id=220, 497.0205pt x 349
 .8525pt>
 File: artifacts/mh01_graphs//09_integrator_convergence.png Graphic file (type p
 ng)
 <use artifacts/mh01_graphs//09_integrator_convergence.png>
 Package pdftex.def Info: artifacts/mh01_graphs//09_integrator_convergence.png  
-used on input line 243.
+used on input line 245.
 (pdftex.def)             Requested size: 220.78285pt x 155.40894pt.
  [12
 
  <./artifacts/mh01_graphs//09_integrator_convergence.png>]
-<artifacts/mh01_graphs//01_trajectory_overlay.png, id=216, 570.276pt x 424.422p
+<artifacts/mh01_graphs//01_trajectory_overlay.png, id=228, 570.276pt x 424.422p
 t>
 File: artifacts/mh01_graphs//01_trajectory_overlay.png Graphic file (type png)
 <use artifacts/mh01_graphs//01_trajectory_overlay.png>
 Package pdftex.def Info: artifacts/mh01_graphs//01_trajectory_overlay.png  used
- on input line 250.
+ on input line 252.
 (pdftex.def)             Requested size: 208.81468pt x 155.40816pt.
  [13
 
  <./artifacts/mh01_graphs//01_trajectory_overlay.png>]
-<artifacts/mh01_graphs//02_kalman_update_in_action.png, id=225, 575.8605pt x 42
+<artifacts/mh01_graphs//02_kalman_update_in_action.png, id=237, 575.8605pt x 42
 4.422pt>
 File: artifacts/mh01_graphs//02_kalman_update_in_action.png Graphic file (type 
 png)
 <use artifacts/mh01_graphs//02_kalman_update_in_action.png>
 Package pdftex.def Info: artifacts/mh01_graphs//02_kalman_update_in_action.png 
- used on input line 255.
+ used on input line 257.
 (pdftex.def)             Requested size: 210.85953pt x 155.40816pt.
  [14
 
  <./artifacts/mh01_graphs//02_kalman_update_in_action.png>]
-<artifacts/mh01_graphs//03_error_and_uncertainty.png, id=233, 641.5605pt x 337.
+<artifacts/mh01_graphs//03_error_and_uncertainty.png, id=245, 641.5605pt x 337.
 698pt>
 File: artifacts/mh01_graphs//03_error_and_uncertainty.png Graphic file (type pn
 g)
 <use artifacts/mh01_graphs//03_error_and_uncertainty.png>
 Package pdftex.def Info: artifacts/mh01_graphs//03_error_and_uncertainty.png  u
-sed on input line 263.
+sed on input line 265.
 (pdftex.def)             Requested size: 295.24867pt x 155.40994pt.
 
 [15
 
  <./artifacts/mh01_graphs//03_error_and_uncertainty.png>]
-<artifacts/mh01_graphs//05_camera_update_effect.png, id=241, 641.889pt x 496.69
+<artifacts/mh01_graphs//05_camera_update_effect.png, id=253, 641.889pt x 496.69
 2pt>
 File: artifacts/mh01_graphs//05_camera_update_effect.png Graphic file (type png
 )
 <use artifacts/mh01_graphs//05_camera_update_effect.png>
 Package pdftex.def Info: artifacts/mh01_graphs//05_camera_update_effect.png  us
-ed on input line 268.
+ed on input line 270.
 (pdftex.def)             Requested size: 200.83467pt x 155.40533pt.
  [16
 
  <./artifacts/mh01_graphs//05_camera_update_effect.png>]
-<artifacts/mh01_graphs//06_innovation_gating.png, id=249, 642.546pt x 496.692pt
+<artifacts/mh01_graphs//06_innovation_gating.png, id=261, 642.546pt x 496.692pt
 >
 File: artifacts/mh01_graphs//06_innovation_gating.png Graphic file (type png)
 <use artifacts/mh01_graphs//06_innovation_gating.png>
 Package pdftex.def Info: artifacts/mh01_graphs//06_innovation_gating.png  used 
-on input line 276.
+on input line 278.
 (pdftex.def)             Requested size: 201.04024pt x 155.40533pt.
  [17
 
  <./artifacts/mh01_graphs//06_innovation_gating.png>]
-<artifacts/mh01_graphs//07_pixel_innovations.png, id=257, 498.006pt x 424.422pt
+<artifacts/mh01_graphs//07_pixel_innovations.png, id=269, 498.006pt x 424.422pt
 >
 File: artifacts/mh01_graphs//07_pixel_innovations.png Graphic file (type png)
 <use artifacts/mh01_graphs//07_pixel_innovations.png>
 Package pdftex.def Info: artifacts/mh01_graphs//07_pixel_innovations.png  used 
-on input line 281.
+on input line 283.
 (pdftex.def)             Requested size: 182.35199pt x 155.40816pt.
  [18
 
  <./artifacts/mh01_graphs//07_pixel_innovations.png>]
-<artifacts/mh01_graphs//13_frontend_health.png, id=265, 642.546pt x 496.692pt>
+<artifacts/mh01_graphs//13_frontend_health.png, id=277, 642.546pt x 496.692pt>
 File: artifacts/mh01_graphs//13_frontend_health.png Graphic file (type png)
 <use artifacts/mh01_graphs//13_frontend_health.png>
 Package pdftex.def Info: artifacts/mh01_graphs//13_frontend_health.png  used on
- input line 289.
+ input line 291.
 (pdftex.def)             Requested size: 201.04024pt x 155.40533pt.
 
 [19
 
  <./artifacts/mh01_graphs//13_frontend_health.png>]
-<artifacts/mh01_graphs//11_state_block_errors.png, id=274, 641.5605pt x 568.962
+<artifacts/mh01_graphs//11_state_block_errors.png, id=286, 641.5605pt x 568.962
 pt>
 File: artifacts/mh01_graphs//11_state_block_errors.png Graphic file (type png)
 <use artifacts/mh01_graphs//11_state_block_errors.png>
 Package pdftex.def Info: artifacts/mh01_graphs//11_state_block_errors.png  used
- on input line 294.
+ on input line 296.
 (pdftex.def)             Requested size: 175.23047pt x 155.40154pt.
  [20
 
  <./artifacts/mh01_graphs//11_state_block_errors.png>]
-<artifacts/mh01_graphs//14_covariance_numerical_health.png, id=282, 641.5605pt 
+<artifacts/mh01_graphs//14_covariance_numerical_health.png, id=294, 641.5605pt 
 x 496.692pt>
 File: artifacts/mh01_graphs//14_covariance_numerical_health.png Graphic file (t
 ype png)
 <use artifacts/mh01_graphs//14_covariance_numerical_health.png>
 Package pdftex.def Info: artifacts/mh01_graphs//14_covariance_numerical_health.
-png  used on input line 302.
+png  used on input line 304.
 (pdftex.def)             Requested size: 200.73189pt x 155.40533pt.
  [21
 
  <./artifacts/mh01_graphs//14_covariance_numerical_health.png>]
-<artifacts/mh01_graphs//04_nees_over_time.png, id=290, 641.5605pt x 337.698pt>
+<artifacts/mh01_graphs//04_nees_over_time.png, id=302, 641.5605pt x 337.698pt>
 File: artifacts/mh01_graphs//04_nees_over_time.png Graphic file (type png)
 <use artifacts/mh01_graphs//04_nees_over_time.png>
 Package pdftex.def Info: artifacts/mh01_graphs//04_nees_over_time.png  used on 
-input line 309.
+input line 311.
 (pdftex.def)             Requested size: 295.24867pt x 155.40994pt.
  [22
 
@@ -1206,13 +1206,13 @@ input line 309.
 [23
 
 ]
-<artifacts/mh01_graphs//10_nees_summary_and_blocks.png, id=338, 714.816pt x 338
+<artifacts/mh01_graphs//10_nees_summary_and_blocks.png, id=350, 714.816pt x 338
 .355pt>
 File: artifacts/mh01_graphs//10_nees_summary_and_blocks.png Graphic file (type 
 png)
 <use artifacts/mh01_graphs//10_nees_summary_and_blocks.png>
 Package pdftex.def Info: artifacts/mh01_graphs//10_nees_summary_and_blocks.png 
- used on input line 339.
+ used on input line 341.
 (pdftex.def)             Requested size: 328.31761pt x 155.40768pt.
  [24
 
@@ -1230,7 +1230,7 @@ Package pdftex.def Info: artifacts/mh01_graphs//10_nees_summary_and_blocks.png
 ]
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `\translate ' on input line 409.
+(hyperref)                removing `\translate ' on input line 411.
 
 [30
 
@@ -1244,37 +1244,37 @@ Package hyperref Warning: Token not allowed in a PDF string (Unicode):
 
 ]
 LaTeX Font Info:    Trying to load font information for T1+lmtt on input line 5
-08.
+10.
 
 (/usr/local/texlive/2023/texmf-dist/tex/latex/lm/t1lmtt.fd
 File: t1lmtt.fd 2015/05/01 v1.6.1 Font defs for Latin Modern
 ) [35
 
 ]
-Underfull \hbox (badness 10000) in paragraph at lines 521--521
+Underfull \hbox (badness 10000) in paragraph at lines 523--523
 []\T1/lmss/m/n/10 Global raw-frame po-si-tion
  []
 
 
-Underfull \hbox (badness 10000) in paragraph at lines 521--521
+Underfull \hbox (badness 10000) in paragraph at lines 523--523
 []\T1/lmss/m/n/10 Ensemble mean needs chi-square
  []
 
 
-Underfull \hbox (badness 2790) in paragraph at lines 521--521
+Underfull \hbox (badness 2790) in paragraph at lines 523--523
 []\T1/lmss/m/n/10 Gate / cal-i-bra-tion di-ag-nos-tic, not
  []
 
 [36
 
 ]
-<artifacts/mh01_graphs//12_gate_distance_over_time.png, id=471, 642.546pt x 337
+<artifacts/mh01_graphs//12_gate_distance_over_time.png, id=483, 642.546pt x 337
 .698pt>
 File: artifacts/mh01_graphs//12_gate_distance_over_time.png Graphic file (type 
 png)
 <use artifacts/mh01_graphs//12_gate_distance_over_time.png>
 Package pdftex.def Info: artifacts/mh01_graphs//12_gate_distance_over_time.png 
- used on input line 526.
+ used on input line 528.
 (pdftex.def)             Requested size: 295.70221pt x 155.40994pt.
  [37
 
@@ -1300,10 +1300,10 @@ Package rerunfilecheck Info: File `ekf_slam_deep_dive.out' has not changed.
 (rerunfilecheck)             Checksum: F69FA4CF13ABD3307141D253F8317C28;947.
  ) 
 Here is how much of TeX's memory you used:
- 27045 strings out of 476025
- 553270 string characters out of 5790018
+ 27051 strings out of 476025
+ 553535 string characters out of 5790018
  1862388 words of memory out of 5000000
- 46805 multiletter control sequences out of 15000+600000
+ 46811 multiletter control sequences out of 15000+600000
  587350 words of font info for 94 fonts, out of 8000000 for 9000
  1141 hyphenation exceptions out of 8191
  128i,13n,122p,406b,1048s stack positions out of 10000i,1000n,20000p,200000b,200000s
@@ -1328,10 +1328,10 @@ s/type1/public/lm/lmsy5.pfb></usr/local/texlive/2023/texmf-dist/fonts/type1/pub
 lic/lm/lmsy7.pfb></usr/local/texlive/2023/texmf-dist/fonts/type1/public/lm/lmtt
 9.pfb></usr/local/texlive/2023/texmf-dist/fonts/type1/public/amsfonts/symbols/m
 sbm10.pfb>
-Output written on output/pdf/ekf_slam_deep_dive.pdf (40 pages, 2915000 bytes).
+Output written on output/pdf/ekf_slam_deep_dive.pdf (40 pages, 2916971 bytes).
 PDF statistics:
- 624 PDF objects out of 1000 (max. 8388607)
- 417 compressed objects within 5 object streams
+ 636 PDF objects out of 1000 (max. 8388607)
+ 423 compressed objects within 5 object streams
  88 named destinations out of 1000 (max. 500000)
- 643 words of extra memory for PDF output out of 10000 (max. 10000000)
+ 679 words of extra memory for PDF output out of 10000 (max. 10000000)
 

@@ -52,6 +52,7 @@ tests/synthetic_test.cpp Synthetic trajectory and IMU propagation tests
 tests/triangulation_test.cpp Stereo triangulation covariance tests
 tests/landmark_augmentation_test.cpp Landmark covariance augmentation tests
 tests/slam_integration_test.cpp End-to-end SLAM state and closed-loop filter tests
+tests/klt_tracker_test.cpp Pyramid-depth selection and border tracking
 tests/corner_detector_test.cpp Detector equivalence against a reference implementation on a real frame
 tests/euroc_frontend_test.cpp Real MH_01 rectification, tracking, and closed-loop smoke tests
 tests/evaluation_test.cpp  Ground-truth association and trajectory-metric tests
@@ -768,6 +769,18 @@ work.
   window and bilinear interpolation needs the pixel after that, so the original
   margin did not actually cover the footprint it was guarding. The trade is a
   one-pixel band at the image border where features are now rejected earlier.
+- **Pyramid depth is chosen per feature, not fixed.** `valid_patch` needs the
+  patch centre `window_half_size + 2` px inside the image at every level used,
+  which in level-0 terms costs `(half + 2) * 2^level` at each border. With four
+  levels and a 21x21 window that excluded the outer 96 px, 55% of a 752x480
+  frame, where a match failed on the bounds check before any iteration ran and
+  never succeeded once. `track_feature` now starts at the deepest level whose
+  footprint fits both images. The condition is monotone in level, so the deepest
+  fitting level also guarantees every finer one. Interior features are
+  unaffected; border features trade convergence range, which is what coarse
+  levels buy, for being trackable at all. A feature at the very edge of a
+  level's validity band remains marginal, because the patch only just fits and
+  iteration drift can leave the image.
 - **Per-level template quantities are computed once, not per iteration.** The
   template patch, its gradients, and its mean do not change while the iteration
   refines the estimate against the target, so they are built alongside the
