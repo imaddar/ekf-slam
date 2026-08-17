@@ -5,9 +5,11 @@
 #include "propagation.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 
 namespace {
 
@@ -18,7 +20,17 @@ int fail(std::string_view message) {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    // Optional frame cap for profiling runs. Accuracy metrics are then only
+    // over the truncated prefix and are not comparable to a full-sequence run.
+    std::size_t max_frames = std::numeric_limits<std::size_t>::max();
+    if (argc > 1) {
+        const std::string_view argument{argv[1]};
+        const auto parsed = std::from_chars(argument.data(), argument.data() + argument.size(), max_frames);
+        if (parsed.ec != std::errc{} || parsed.ptr != argument.data() + argument.size() || max_frames == 0) {
+            return fail("usage: mh01_benchmark [max_frames], where max_frames is a positive integer");
+        }
+    }
     const auto dataset = parse_dataset(std::filesystem::path{EKF_SLAM_SOURCE_DIR} / "datasets/machine_hall/MH_01_easy");
     if (!dataset) return fail(dataset.error());
     const auto rectification = make_stereo_rectification(dataset->cam0_calibration, dataset->cam1_calibration);
@@ -38,11 +50,13 @@ int main() {
     std::size_t imu_index = 0;
     TimestampNs last_imu_timestamp = initial.timestamp;
     int applied = 0, gated = 0, augmented = 0, peak_tracks = 0;
-    std::chrono::nanoseconds frontend_time{}, update_time{};
+    std::size_t processed_frames = 0;
+    std::chrono::nanoseconds frontend_time{}, update_time{}, decode_time{};
     std::vector<TrajectoryEstimate> estimates;
     estimates.reserve(dataset->stereo_pairs.size());
 
     for (const StereoPair& pair : dataset->stereo_pairs) {
+        if (processed_frames >= max_frames) break;
         while (imu_index < dataset->imu_measurements.size() && dataset->imu_measurements[imu_index].timestamp <= pair.timestamp) {
             const ImuMeasurement& measurement = dataset->imu_measurements[imu_index++];
             if (measurement.timestamp <= last_imu_timestamp) continue;
@@ -51,8 +65,10 @@ int main() {
             if (!propagation) return fail(propagation.error());
             last_imu_timestamp = measurement.timestamp;
         }
+        const auto decode_start = std::chrono::steady_clock::now();
         const auto cam0 = load_grayscale_png(pair.cam0_image_path);
         const auto cam1 = load_grayscale_png(pair.cam1_image_path);
+        decode_time += std::chrono::steady_clock::now() - decode_start;
         if (!cam0) return fail(cam0.error());
         if (!cam1) return fail(cam1.error());
         const auto frontend_start = std::chrono::steady_clock::now();
@@ -87,10 +103,21 @@ int main() {
             estimates.push_back(TrajectoryEstimate{.timestamp = pair.timestamp, .state = state.robot,
                 .covariance = state.robot_covariance()});
         }
+        ++processed_frames;
     }
     const auto metrics = evaluate_trajectory(estimates, dataset->ground_truth_states);
     if (!metrics) return fail(metrics.error());
-    const double frames = static_cast<double>(estimates.size());
+    // Timing is per processed frame; accuracy metrics cover only the camera
+    // timestamps shared with ground truth, so the two counts differ.
+    const double frames = static_cast<double>(processed_frames);
+    const FrontendStageTimings& stages = frontend.stage_timings();
+    const double frontend_ns = static_cast<double>(stages.total.count());
+    const auto stage_line = [&](std::string_view name, std::chrono::nanoseconds total) {
+        std::cout << "  " << name << '=' << static_cast<double>(total.count()) / frames / 1e6 << " ms ("
+                  << 100.0 * static_cast<double>(total.count()) / frontend_ns << "%)\n";
+    };
+    const std::chrono::nanoseconds accounted = stages.rectify + stages.pyramid + stages.temporal_klt
+        + stages.forward_backward + stages.stereo_tracked + stages.detect + stages.stereo_new;
     std::cout << "MH_01_easy benchmark\n"
               << "frames=" << metrics->sample_count << " rpe_pairs=" << metrics->rpe_pair_count << '\n'
               << "ate_position_rmse_m=" << metrics->ate_position_rmse_m << '\n'
@@ -98,7 +125,25 @@ int main() {
               << "rpe_rotation_rmse_rad_per_s=" << metrics->rpe_rotation_rmse_rad_per_s << '\n'
               << "mean_robot_nees_15dof=" << metrics->mean_robot_nees << '\n'
               << "peak_tracks=" << peak_tracks << " augmented=" << augmented << " applied=" << applied << " gated=" << gated << '\n'
+              << "processed_frames=" << processed_frames << '\n'
+              << "png_decode_ms_per_frame=" << decode_time.count() / frames / 1e6 << '\n'
               << "frontend_ms_per_frame=" << frontend_time.count() / frames / 1e6 << '\n'
-              << "update_ms_per_frame=" << update_time.count() / frames / 1e6 << '\n';
+              << "update_ms_per_frame=" << update_time.count() / frames / 1e6 << '\n'
+              << "frontend stage breakdown\n";
+    stage_line("rectify", stages.rectify);
+    stage_line("pyramid", stages.pyramid);
+    stage_line("temporal_klt", stages.temporal_klt);
+    stage_line("forward_backward", stages.forward_backward);
+    stage_line("stereo_tracked", stages.stereo_tracked);
+    stage_line("detect", stages.detect);
+    stage_line("stereo_new", stages.stereo_new);
+    stage_line("bookkeeping", stages.total - accounted);
+    const auto per_call_us = [](std::chrono::nanoseconds total, std::size_t calls) {
+        return calls == 0 ? 0.0 : static_cast<double>(total.count()) / static_cast<double>(calls) / 1e3;
+    };
+    std::cout << "temporal_klt_calls_per_frame=" << static_cast<double>(stages.temporal_calls) / frames
+              << " us_per_call=" << per_call_us(stages.temporal_klt, stages.temporal_calls) << '\n'
+              << "stereo_new_calls_per_frame=" << static_cast<double>(stages.stereo_new_calls) / frames
+              << " us_per_call=" << per_call_us(stages.stereo_new, stages.stereo_new_calls) << '\n';
     return EXIT_SUCCESS;
 }

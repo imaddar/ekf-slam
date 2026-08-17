@@ -34,6 +34,8 @@ KltResult track_feature(const ImagePyramid& from, const ImagePyramid& to, const 
         const double min_eigenvalue = 0.5 * (hessian.trace() - std::sqrt(
             (hessian(0, 0) - hessian(1, 1)) * (hessian(0, 0) - hessian(1, 1)) + 4.0 * hessian(0, 1) * hessian(0, 1)));
         if (min_eigenvalue < options.min_hessian_eigenvalue) return {estimate * scale, KltStatus::kIllConditioned};
+        bool converged = false;
+        double residual_per_pixel = 0.0;
         for (int iteration = 0; iteration < options.max_iterations; ++iteration) {
             double template_mean = 0.0, target_mean = 0.0;
             const int n = (2 * options.window_half_size + 1) * (2 * options.window_half_size + 1);
@@ -53,9 +55,14 @@ KltResult track_feature(const ImagePyramid& from, const ImagePyramid& to, const 
             }
             Eigen::Vector2d delta = hessian.ldlt().solve(gradient_error); if (options.constrain_to_row) delta.y() = 0.0;
             estimate -= delta;
+            residual_per_pixel = residual / n;
             if (!valid_patch(target_image, estimate, options.window_half_size)) return {estimate * scale, KltStatus::kOutOfBounds};
-            if (delta.norm() < options.convergence_px) return {estimate * scale, KltStatus::kTracked, residual / n};
+            if (delta.norm() < options.convergence_px) { converged = true; break; }
         }
+        // Converging at a coarse level means the estimate is good at that
+        // level's resolution, not at full resolution. Carry it down and refine;
+        // only level 0 produces a reportable result.
+        if (level == 0) return {estimate, converged ? KltStatus::kTracked : KltStatus::kDiverged, residual_per_pixel};
     }
     return {estimate, KltStatus::kDiverged};
 }

@@ -315,6 +315,30 @@ if(BUILD_TESTING)
 
     gtest_discover_tests(synthetic_tests)
 
+    add_executable(corner_detector_tests
+        tests/corner_detector_test.cpp
+    )
+
+    target_link_libraries(corner_detector_tests
+        PRIVATE
+            ekf_slam_parser
+            GTest::gtest_main
+    )
+
+    target_compile_options(corner_detector_tests
+        PRIVATE
+            -Wall
+            -Wextra
+            -Werror
+    )
+
+    target_compile_definitions(corner_detector_tests
+        PRIVATE
+            EKF_SLAM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+
+    gtest_discover_tests(corner_detector_tests)
+
     add_executable(euroc_frontend_tests
         tests/euroc_frontend_test.cpp
     )

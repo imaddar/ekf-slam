@@ -24,7 +24,8 @@ klt_tracker.hpp/cpp Pyramidal inverse-compositional KLT tracking
 stereo_matcher.hpp/cpp Row-constrained rectified stereo association
 feature_frontend.hpp/cpp Stateful track lifecycle and estimator-facing observations
 evaluation.hpp/cpp  Ground-truth association plus ATE/RPE/NEES trajectory metrics
-mh01_benchmark.cpp  Reproducible full-sequence MH_01 evaluator executable
+mh01_benchmark.cpp  Reproducible MH_01 evaluator executable; optional `[max_frames]`
+                    argument truncates the run for profiling
 measurement_model.hpp/cpp Pure pinhole prediction h(.) and sparse Jacobian blocks
 measurement_update.hpp/cpp Sequential per-landmark stereo EKF update and gating
 propagation.hpp/cpp Public IMU nominal-state propagation
@@ -50,6 +51,7 @@ tests/synthetic_test.cpp Synthetic trajectory and IMU propagation tests
 tests/triangulation_test.cpp Stereo triangulation covariance tests
 tests/landmark_augmentation_test.cpp Landmark covariance augmentation tests
 tests/slam_integration_test.cpp End-to-end SLAM state and closed-loop filter tests
+tests/corner_detector_test.cpp Detector equivalence against a reference implementation on a real frame
 tests/euroc_frontend_test.cpp Real MH_01 rectification, tracking, and closed-loop smoke tests
 tests/evaluation_test.cpp  Ground-truth association and trajectory-metric tests
 ```
@@ -265,6 +267,9 @@ agreement between injected noise and the calibration densities.
 - `FeatureFrontend::process(cam0_raw, cam1_raw, timestamp)` — public. Rectifies
   a pair, tracks and stereo-matches features, then returns mapped observations,
   augmentation candidates, and deferred landmark removals.
+- `FeatureFrontend::stage_timings()` — public. Returns the `FrontendStageTimings`
+  wall-clock totals accumulated per stage across every processed frame, so a
+  caller can attribute frontend cost without an external profiler.
 - `SlamState::robot_landmark_covariance()` and
   `SlamState::landmark_landmark_covariance()` — public. Return active-region
   views of `P_rl` and `P_ll`; inactive landmark capacity is excluded.
@@ -742,7 +747,6 @@ work.
   Products such as `0.29 * 200` evaluate to `57.999999999999993`, and a plain
   `floor` dropped the final sample — which showed up as a 17x worse propagation
   error (`0.009` vs `0.0005`) that looked like an integrator bug and was not.
-
 ### Build and tooling
 
 - **`RelWithDebInfo` is the default build type.** Eigen depends on optimization

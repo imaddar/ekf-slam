@@ -558,6 +558,58 @@ documented instead of hidden.
 against a 5,000 us budget at 200 Hz (0.04% of it). Dev machine, not Jetson;
 `RelWithDebInfo`.
 
+The frontend is the opposite story: **110.7 ms/frame against a 50 ms budget at
+20 Hz**, a 2.2x miss. That number alone is not interesting. Where it goes is.
+
+### Profiling the frontend — the answer was not where I looked
+
+Before measuring, my ranked guesses were the pyramidal KLT inner loop, the
+forward-backward check, and the `std::expected<double, std::string>` return type
+on `sample_bilinear` in the hottest loop in the system. All three are defensible
+from reading the code. Per-stage timers said:
+
+| Stage | ms/frame | Share |
+|---|---|---|
+| `detect` | 59.14 | 53.4% |
+| `stereo_new` | 29.63 | 26.8% |
+| `temporal_klt` | 9.39 | 8.5% |
+| `stereo_tracked` | 6.43 | 5.8% |
+| `forward_backward` | 3.49 | 3.2% |
+| `pyramid` | 1.77 | 1.6% |
+| `rectify` | 0.78 | 0.7% |
+
+**80% of the frontend is acquiring new features. 17% is tracking the ones it
+already has.** Every optimization I had ranked first lives inside that 17%.
+Hoisting the KLT template samples — the change I was most confident about —
+would have bought a fraction of a 8.5% slice.
+
+The real structure is two independent mistakes that compound:
+
+**A fixed cost that ignores demand.** `detect_corners` scans all 360k pixels and
+builds a 7x7 structure tensor at each one, so each gradient is recomputed about
+49 times across overlapping windows. That is `59 ms` whether the filter needs
+one new feature or none, and it runs every single frame. A separable
+sliding-window or integral-image formulation makes it O(1) per pixel; skipping
+detection when the landmark budget is full removes it entirely on most frames.
+
+**Work discarded downstream.** The detector emits 196.7 corners per frame into a
+100-landmark budget, and every one of them pays for a stereo search before the
+filter decides it has no room. The per-call cost of an unprimed search is only
+~2.6x a primed one — the damage is volume, not any single pathological search.
+
+The presentable lesson is the ordering. Reading the code produced a confident,
+specific, and wrong ranking; ~40 lines of `steady_clock` accumulators produced
+the right one in one 45-second run. Per-call counters mattered as much as the
+timers: bulk stage totals alone suggested unprimed stereo searches were ~34x
+more expensive than primed ones, and dividing by call counts showed the true
+per-call ratio was ~2.6x with volume explaining the rest. A ratio of totals is
+not a ratio of costs.
+
+The instrumentation is permanent rather than a throwaway profiling script,
+because the same breakdown is what verifies each optimization afterward — and it
+reproduces the recorded ATE and NEES exactly, so it perturbs neither timing nor
+estimates.
+
 ---
 
 ## 6. Lessons learned
@@ -694,6 +746,13 @@ margin (§5).
 (§2), the synthetic harness inversion trick (§3), and two lessons (§6).
 
 **Figures worth building:**
+
+The full MH_01 run can export reproducible visualization traces with
+`mh01_benchmark --trace-dir <directory>`. `imu_trace.csv` records each IMU
+posterior robot state and 15-state covariance; `camera_trace.csv` records the
+prior and posterior around each visual update; `observation_trace.csv` records
+pixel predictions, observations, innovations, gate distances, and outcomes.
+`metadata.json` captures the run configuration and compiled Git revision.
 
 1. Drift vs. horizon, log-y, with the reported 1-sigma band overlaid — one plot
    carries both §1's motivation and §5's honest observation about consistency.
