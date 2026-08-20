@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <charconv>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -25,11 +26,16 @@ int fail(std::string_view message) {
 
 int main(int argc, char** argv) {
     constexpr std::string_view kUsage =
-        "usage: mh01_benchmark [max_frames] [--sequence NAME] [--trace-dir directory] [--static-init]";
+        "usage: mh01_benchmark [max_frames] [--sequence NAME] [--trace-dir directory] [--static-init] "
+        "[--pixel-sigma VALUE] [--update-stride N] [--correlation-inflation VALUE] [--decorrelation-parallax-px VALUE]";
     std::size_t max_frames = std::numeric_limits<std::size_t>::max();
     std::string sequence_name = "MH_01_easy";
     std::optional<std::filesystem::path> trace_directory;
     bool use_static_initialization = false;
+    double pixel_sigma = 0.5;
+    std::size_t update_stride = 1;
+    double correlation_inflation = 0.0;
+    double decorrelation_parallax_px = 3.0;
     for (int argument_index = 1; argument_index < argc; ++argument_index) {
         const std::string_view argument{argv[argument_index]};
         if (argument == "--trace-dir") {
@@ -46,6 +52,45 @@ int main(int argc, char** argv) {
             use_static_initialization = true;
             continue;
         }
+        if (argument == "--pixel-sigma") {
+            if (++argument_index >= argc) return fail(kUsage);
+            const std::string_view value{argv[argument_index]};
+            const auto parsed = std::from_chars(value.data(), value.data() + value.size(), pixel_sigma);
+            if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size()
+                || !(std::isfinite(pixel_sigma) && pixel_sigma > 0.0)) {
+                return fail("--pixel-sigma: expected a positive finite value");
+            }
+            continue;
+        }
+        if (argument == "--update-stride") {
+            if (++argument_index >= argc) return fail(kUsage);
+            const std::string_view value{argv[argument_index]};
+            const auto parsed = std::from_chars(value.data(), value.data() + value.size(), update_stride);
+            if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || update_stride == 0) {
+                return fail("--update-stride: expected a positive integer");
+            }
+            continue;
+        }
+        if (argument == "--correlation-inflation") {
+            if (++argument_index >= argc) return fail(kUsage);
+            const std::string_view value{argv[argument_index]};
+            const auto parsed = std::from_chars(value.data(), value.data() + value.size(), correlation_inflation);
+            if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size()
+                || !(std::isfinite(correlation_inflation) && correlation_inflation >= 0.0)) {
+                return fail("--correlation-inflation: expected a finite non-negative value");
+            }
+            continue;
+        }
+        if (argument == "--decorrelation-parallax-px") {
+            if (++argument_index >= argc) return fail(kUsage);
+            const std::string_view value{argv[argument_index]};
+            const auto parsed = std::from_chars(value.data(), value.data() + value.size(), decorrelation_parallax_px);
+            if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size()
+                || !(std::isfinite(decorrelation_parallax_px) && decorrelation_parallax_px > 0.0)) {
+                return fail("--decorrelation-parallax-px: expected a positive finite value");
+            }
+            continue;
+        }
         const auto parsed = std::from_chars(argument.data(), argument.data() + argument.size(), max_frames);
         if (parsed.ec != std::errc{} || parsed.ptr != argument.data() + argument.size() || max_frames == 0) {
             return fail(kUsage);
@@ -55,7 +100,10 @@ int main(int argc, char** argv) {
     if (!dataset) return fail(dataset.error());
     const auto rectification = make_stereo_rectification(dataset->cam0_calibration, dataset->cam1_calibration);
     if (!rectification) return fail(rectification.error());
-    auto frontend_result = FeatureFrontend::create(*rectification);
+    auto frontend_result = FeatureFrontend::create(*rectification, FrontendOptions{
+        .correlation_inflation = correlation_inflation,
+        .decorrelation_parallax_px = decorrelation_parallax_px,
+    });
     if (!frontend_result) return fail(frontend_result.error());
     FeatureFrontend frontend = std::move(*frontend_result);
     const GroundTruthState& initial = dataset->ground_truth_states.front();
@@ -88,18 +136,22 @@ int main(int argc, char** argv) {
     // argues for an effective 0.72 px. Measured, that trade is a wash: NEES
     // improves 10% and ATE degrades 10%, because R is not the binding
     // constraint on consistency -- unobservable-direction drift is. Left at
-    // 0.5 px and worth revisiting once FEJ lands. See BENCHMARKS.md.
-    constexpr double kPixelSigma = 0.5;
-    const Eigen::Matrix4d pixel_covariance = kPixelSigma * kPixelSigma * Eigen::Matrix4d::Identity();
+    // 0.5 px by default and worth revisiting once FEJ lands; --pixel-sigma
+    // exists for calibration sweeps. See BENCHMARKS.md and R_CALIBRATION_MH01.md.
+    const Eigen::Matrix4d pixel_covariance = pixel_sigma * pixel_sigma * Eigen::Matrix4d::Identity();
     std::optional<BenchmarkTraceWriter> trace;
     if (trace_directory) {
-        auto writer = BenchmarkTraceWriter::create(*trace_directory, EKF_SLAM_GIT_REVISION, state.max_landmarks(), kPixelSigma);
+        auto writer = BenchmarkTraceWriter::create(*trace_directory, EKF_SLAM_GIT_REVISION, state.max_landmarks(), pixel_sigma);
         if (!writer) return fail(writer.error());
         trace = std::move(*writer);
     }
     std::size_t imu_index = 0;
     TimestampNs last_imu_timestamp = initial.timestamp;
     int applied = 0, gated = 0, augmented = 0, peak_tracks = 0;
+    double applied_nis = 0.0;
+    double gated_nis = 0.0;
+    int applied_nis_count = 0;
+    int gated_nis_count = 0;
     std::size_t processed_frames = 0;
     std::chrono::nanoseconds frontend_time{}, update_time{}, decode_time{};
     std::vector<TrajectoryEstimate> estimates;
@@ -136,12 +188,24 @@ int main(int argc, char** argv) {
         const NominalState prior = state.robot;
         const ImuStateCovariance prior_covariance = state.robot_covariance();
         const auto update_start = std::chrono::steady_clock::now();
-        const auto update = update_stereo_frame(state, frame->mapped_observations, rectification->cam0_rectified,
+        const std::span<const StereoObservation> mapped_observations = processed_frames % update_stride == 0
+            ? std::span<const StereoObservation>{frame->mapped_observations}
+            : std::span<const StereoObservation>{};
+        const auto update = update_stereo_frame(state, mapped_observations, rectification->cam0_rectified,
             rectification->cam1_rectified, pixel_covariance);
         update_time += std::chrono::steady_clock::now() - update_start;
         if (!update) return fail(update.error());
         applied += update->applied_count;
         gated += update->gated_count;
+        for (const LandmarkUpdateDiagnostics& diagnostic : update->diagnostics) {
+            if (diagnostic.outcome == ObservationOutcome::kApplied) {
+                applied_nis += diagnostic.mahalanobis_distance;
+                ++applied_nis_count;
+            } else if (diagnostic.outcome == ObservationOutcome::kGated) {
+                gated_nis += diagnostic.mahalanobis_distance;
+                ++gated_nis_count;
+            }
+        }
         frontend.report_outcomes(update->diagnostics);
         std::vector<LandmarkId> births;
         for (const StereoObservation& candidate : frame->birth_candidates) {
@@ -190,12 +254,17 @@ int main(int argc, char** argv) {
         + stages.forward_backward + stages.stereo_tracked + stages.detect + stages.stereo_new;
     std::cout << sequence_name << " benchmark\n"
               << "initialization=" << (use_static_initialization ? "static_imu_truth_position_heading" : "ground_truth") << '\n'
+              << "pixel_sigma=" << pixel_sigma << " update_stride=" << update_stride
+              << " correlation_inflation=" << correlation_inflation
+              << " decorrelation_parallax_px=" << decorrelation_parallax_px << '\n'
               << "frames=" << metrics->sample_count << " rpe_pairs=" << metrics->rpe_pair_count << '\n'
               << "ate_position_rmse_m=" << metrics->ate_position_rmse_m << '\n'
               << "rpe_translation_rmse_m_per_s=" << metrics->rpe_translation_rmse_m_per_s << '\n'
               << "rpe_rotation_rmse_rad_per_s=" << metrics->rpe_rotation_rmse_rad_per_s << '\n'
               << "mean_robot_nees_15dof=" << metrics->mean_robot_nees << '\n'
               << "peak_tracks=" << peak_tracks << " augmented=" << augmented << " applied=" << applied << " gated=" << gated << '\n'
+              << "mean_applied_nis_4dof=" << (applied_nis_count == 0 ? 0.0 : applied_nis / applied_nis_count) << '\n'
+              << "mean_gated_nis_4dof=" << (gated_nis_count == 0 ? 0.0 : gated_nis / gated_nis_count) << '\n'
               << "processed_frames=" << processed_frames << '\n'
               << "png_decode_ms_per_frame=" << decode_time.count() / frames / 1e6 << '\n'
               << "frontend_ms_per_frame=" << frontend_time.count() / frames / 1e6 << '\n'

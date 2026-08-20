@@ -20,7 +20,9 @@ private:
 }  // namespace
 
 ParseResult<FeatureFrontend> FeatureFrontend::create(const StereoRectification& rectification, const FrontendOptions& options) {
-    if (!rectification.maps || options.max_mapped_landmarks == 0 || options.min_track_age_for_mapping < 1) return std::unexpected("feature frontend: expected rectification and positive capacities");
+    if (!rectification.maps || options.max_mapped_landmarks == 0 || options.min_track_age_for_mapping < 1
+        || !(options.correlation_inflation >= 0.0) || !(options.decorrelation_parallax_px > 0.0)
+        || !(options.decorrelation_interval_seconds > 0.0)) return std::unexpected("feature frontend: expected rectification and positive capacities");
     if (options.max_tracks < options.max_mapped_landmarks) return std::unexpected("feature frontend: expected max_tracks to be at least max_mapped_landmarks");
     if (options.redetect_below == 0 || options.redetect_below > options.max_tracks) return std::unexpected("feature frontend: expected redetect_below in (0, max_tracks]");
     FeatureFrontend frontend;
@@ -30,6 +32,7 @@ ParseResult<FeatureFrontend> FeatureFrontend::create(const StereoRectification& 
 }
 
 ParseResult<FrontendFrame> FeatureFrontend::process(const GrayImage& raw0, const GrayImage& raw1, TimestampNs timestamp) {
+    current_timestamp_ = timestamp;
     ScopedTimer total_timer{timings_.total}; ++timings_.frames;
     const auto rectify_start = Clock::now();
     auto image0 = rectify_cam0(rectification_, raw0); auto image1 = rectify_cam1(rectification_, raw1);
@@ -84,7 +87,16 @@ ParseResult<FrontendFrame> FeatureFrontend::process(const GrayImage& raw0, const
     }
     std::size_t mapped = 0;
     for (const auto& [id, track] : tracks_) {
-        const StereoObservation observation{.id = id, .pixel_cam0 = track.pixel, .pixel_cam1 = track.pixel_cam1};
+        double covariance_scale = 1.0;
+        if (track.state == TrackState::kMapped && track.has_last_update && options_.correlation_inflation > 0.0) {
+            const double parallax = (track.pixel - track.last_update_pixel).norm();
+            const double elapsed = static_cast<double>(timestamp - track.last_update_timestamp) * 1e-9;
+            const double separation = std::max(parallax / options_.decorrelation_parallax_px,
+                elapsed / options_.decorrelation_interval_seconds);
+            const double correlation = std::max(0.0, 1.0 - std::min(1.0, separation));
+            covariance_scale += options_.correlation_inflation * correlation * correlation;
+        }
+        const StereoObservation observation{.id = id, .pixel_cam0 = track.pixel, .pixel_cam1 = track.pixel_cam1, .covariance_scale = covariance_scale};
         if (track.state == TrackState::kMapped) { if (mapped++ < options_.max_mapped_landmarks) frame.mapped_observations.push_back(observation); }
         else if (track.age >= options_.min_track_age_for_mapping) frame.birth_candidates.push_back(observation);
     }
@@ -92,4 +104,4 @@ ParseResult<FrontendFrame> FeatureFrontend::process(const GrayImage& raw0, const
 }
 
 void FeatureFrontend::report_augmentation(std::span<const LandmarkId> ids) { for (LandmarkId id : ids) if (auto it = tracks_.find(id); it != tracks_.end()) it->second.state = TrackState::kMapped; }
-void FeatureFrontend::report_outcomes(std::span<const LandmarkUpdateDiagnostics> outcomes) { for (const auto& outcome : outcomes) if (auto it = tracks_.find(outcome.id); it != tracks_.end()) it->second.gated = outcome.outcome == ObservationOutcome::kGated ? it->second.gated + 1 : 0; }
+void FeatureFrontend::report_outcomes(std::span<const LandmarkUpdateDiagnostics> outcomes) { for (const auto& outcome : outcomes) if (auto it = tracks_.find(outcome.id); it != tracks_.end()) { it->second.gated = outcome.outcome == ObservationOutcome::kGated ? it->second.gated + 1 : 0; if (outcome.outcome == ObservationOutcome::kApplied) { it->second.last_update_pixel = it->second.pixel; it->second.last_update_timestamp = current_timestamp_; it->second.has_last_update = true; } } }
