@@ -23,23 +23,28 @@ int fail(std::string_view message) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    constexpr std::string_view kUsage = "usage: mh01_benchmark [max_frames] [--sequence NAME] [--trace-dir directory]";
     std::size_t max_frames = std::numeric_limits<std::size_t>::max();
+    std::string sequence_name = "MH_01_easy";
     std::optional<std::filesystem::path> trace_directory;
     for (int argument_index = 1; argument_index < argc; ++argument_index) {
         const std::string_view argument{argv[argument_index]};
         if (argument == "--trace-dir") {
-            if (++argument_index >= argc || trace_directory) {
-                return fail("usage: mh01_benchmark [max_frames] [--trace-dir directory]");
-            }
+            if (++argument_index >= argc || trace_directory) return fail(kUsage);
             trace_directory = argv[argument_index];
+            continue;
+        }
+        if (argument == "--sequence") {
+            if (++argument_index >= argc) return fail(kUsage);
+            sequence_name = argv[argument_index];
             continue;
         }
         const auto parsed = std::from_chars(argument.data(), argument.data() + argument.size(), max_frames);
         if (parsed.ec != std::errc{} || parsed.ptr != argument.data() + argument.size() || max_frames == 0) {
-            return fail("usage: mh01_benchmark [max_frames] [--trace-dir directory]");
+            return fail(kUsage);
         }
     }
-    const auto dataset = parse_dataset(std::filesystem::path{EKF_SLAM_SOURCE_DIR} / "datasets/machine_hall/MH_01_easy");
+    const auto dataset = parse_dataset(std::filesystem::path{EKF_SLAM_SOURCE_DIR} / "datasets/machine_hall" / sequence_name);
     if (!dataset) return fail(dataset.error());
     const auto rectification = make_stereo_rectification(dataset->cam0_calibration, dataset->cam1_calibration);
     if (!rectification) return fail(rectification.error());
@@ -159,7 +164,7 @@ int main(int argc, char** argv) {
     };
     const std::chrono::nanoseconds accounted = stages.rectify + stages.pyramid + stages.temporal_klt
         + stages.forward_backward + stages.stereo_tracked + stages.detect + stages.stereo_new;
-    std::cout << "MH_01_easy benchmark\n"
+    std::cout << sequence_name << " benchmark\n"
               << "frames=" << metrics->sample_count << " rpe_pairs=" << metrics->rpe_pair_count << '\n'
               << "ate_position_rmse_m=" << metrics->ate_position_rmse_m << '\n'
               << "rpe_translation_rmse_m_per_s=" << metrics->rpe_translation_rmse_m_per_s << '\n'

@@ -552,6 +552,42 @@ failure that was diagnosed to a specific cause rather than tuned away, and a
 decision to ship a known-imperfect filter with the imperfection measured and
 documented instead of hidden.
 
+### Generalizing beyond MH_01
+
+Every number above the frontend section came from one sequence. Tuning the
+track-pool hysteresis (300/200) on MH_01 alone and calling it done invites the
+obvious question: does it hold anywhere else? `mh01_benchmark` took a
+`--sequence` flag and ran, unmodified, against the rest of the Machine Hall
+set:
+
+| Sequence | ATE (m) | RPE trans (m/s) | Mean NEES | Frontend + update (ms/frame) |
+|---|---|---|---|---|
+| MH_01_easy | 0.177 | 0.0138 | 6,658 | 41.0 |
+| MH_02_easy | 0.133 | 0.0107 | 4,542 | 40.0 |
+| MH_03_medium | 0.156 | 0.0327 | 4,646 | 41.8 |
+| MH_05_difficult | 0.459 | 0.0289 | 18,118 | 39.0 |
+
+Two results, one clean and one not. Timing generalizes cleanly: all four stay
+inside the `50 ms` budget with 10-15% headroom, so a threshold tuned on one
+sequence's motion and feature density did not overfit to it. Accuracy does
+not: `MH_03_medium` matches the `easy` pair on ATE but has 2.4-3x worse RPE,
+and `MH_05_difficult` is 2.6-3.5x worse on both ATE and NEES than any other
+sequence. That is the expected shape given the yaw-NEES finding above — more
+aggressive motion excites the second-order linearization error harder — not a
+new defect, but it is a real number I would not have without running it, and
+a good example of why "it works on my one sequence" is not a claim worth
+making.
+
+**`MH_04_difficult` does not run at all**, and not because of the filter:
+`unzip -l` on the raw EuRoC download shows cam0 has 2,033 frames to cam1's
+2,032 — one image is simply missing from the vendor archive. The parser hard
+fails on that mismatch by design (`ARCHITECTURE.md` documents "camera frame
+gap → warn, continue" as a known gap, not yet implemented). Worth having in
+the back pocket for a "how do you handle bad input data" question: the honest
+answer here is "the pipeline detects it and refuses to silently drop a frame,
+and the graceful-degradation path is a scoped, not-yet-built feature," which
+is a better answer than either crashing unpredictably or getting lucky.
+
 ### Runtime
 
 6,001 sequential propagation steps in 11.1–11.4 ms → **1.84–1.91 us per step**,
