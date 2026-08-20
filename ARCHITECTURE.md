@@ -135,7 +135,10 @@ both depths plus a `visible` flag, leaving the Jacobians zero when either depth
 is non-positive. `update_stereo_frame(...)` runs the sequential sweep: it
 predicts, linearizes, and chi-square gates every observation against the prior
 covariance without writing to `P`, then applies the surviving observations one
-at a time in ascending landmark-offset order, then injects once. It reports
+at a time in ascending landmark-ID order, then injects once. `UpdateOptions`
+also exposes an opt-in iterated-EKF count: every iteration relinearizes around a
+temporary retracted state but restarts covariance calculation from the same
+prior, so a frame's pixels are never assimilated more than once. It reports
 per-observation diagnostics (outcome, Mahalanobis distance, prior residual) and
 the injected error state. Observations of unknown landmarks are skipped rather
 than treated as errors.
@@ -274,7 +277,8 @@ agreement between injected noise and the calibration densities.
   reports depth and visibility.
 - `update_stereo_frame(state, observations, cam0, cam1, pixel_covariance, options)` —
   public. Runs the sequential per-landmark stereo update for one frame: gate
-  against the prior, sweep, inject once.
+  against the prior, sweep, inject once. `options.max_iterations = 1` is the
+  standard EKF; higher values enable the experimental iterated sweep.
 - `make_stereo_rectification(cam0_raw, cam1_raw)` — public. Derives OpenCV remap
   tables plus distortion-free pseudo-calibrations whose extrinsics describe the
   rotated rectified camera frames.
@@ -881,11 +885,19 @@ sections above (or out of this file) once it is actually built.
   in tilt because rotation is the only state entering the measurement
   nonlinearly.
 
-  That makes an **iterated EKF the targeted fix**, not FEJ. Relinearizing toward
-  the posterior attacks a second-order error; FEJ attacks a different problem
-  this filter does not currently have. Freezing the linearization point per frame
+  An **iterated EKF was the leading hypothesis**, not FEJ: relinearizing toward
+  the posterior attacks a second-order error, while FEJ attacks a different
+  problem this filter does not currently have. It is now implemented as an
+  opt-in prototype (`UpdateOptions::max_iterations` in `measurement_update.cpp`)
+  and tested in isolation on the `codex/nees-experiments` branch: three
+  iterations is the best tradeoff found, but still misses the consistency
+  bound by 37% at 2.63x the per-frame cost, and more iterations make NEES
+  worse rather than better, so the undamped fixed-point form is not reliably
+  convergent. It stays a research prototype behind the flag, not a
+  default-path fix; matched initial-tilt quality is the stronger lever (see
+  the Initialization bullet below). Freezing the linearization point per frame
   is already in place and remains a prerequisite if FEJ is wanted later.
-  See `BENCHMARKS.md` for the full experiment set;
+  See `BENCHMARKS.md` and `NEES_EXPERIMENTS.md` for the full experiment set;
   `SlamClosedLoopTest.DISABLED_MonteCarloRobotNeesMeetsTheConsistencyTarget` is
   the acceptance test.
 - **Feature frontend.** The implementation uses hand-written pyramidal,

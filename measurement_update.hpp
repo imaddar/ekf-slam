@@ -71,6 +71,10 @@ struct UpdateOptions {
     // optimal gain; it is retained because it degrades more gracefully across a
     // sweep of successive updates. Disable it only to compare the two.
     bool use_joseph_form = true;
+    // Re-linearize an accepted frame this many times. One is the standard EKF
+    // update; higher values are an iterated EKF that still consumes each pixel
+    // measurement only once in the final covariance update.
+    int max_iterations = 1;
 };
 
 struct StereoUpdateResult {

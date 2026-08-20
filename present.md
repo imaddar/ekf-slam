@@ -546,6 +546,16 @@ the suite green. The live test asserts a regression ceiling of `30` so the numbe
 cannot silently worsen, and the real bound survives as a deliberately disabled
 test that is the acceptance criterion for the iterated-EKF work.
 
+**Follow-up experiment (isolated branch).** An undamped iterated update reduced
+mean NEES only from `24.23` to `22.73` with three passes, while increasing
+camera-update time from `16.2` to `42.7` microseconds/frame; more passes became
+worse. It confirms the nonlinearity diagnosis but is not a performance-safe
+solution. Matched static initialization at `0.001 rad` tilt reaches `15.92`,
+inside the interval, with no hot-path cost. A 2x assumed pixel covariance also
+passes (`15.58`) at no timing cost, but because generated noise is already
+0.5 px, that is a calibration-sensitivity result—not an honest fix. The full
+method and table are in `NEES_EXPERIMENTS.md`.
+
 This is the part of the project worth defending in a technical interview: a
 metric that only existed because the covariance was being tested at all, a
 failure that was diagnosed to a specific cause rather than tuned away, and a

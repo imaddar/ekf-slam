@@ -93,11 +93,14 @@ void symmetrize(Eigen::MatrixBase<Derived>& covariance) {
 }
 
 struct PreparedObservation {
-    StereoMeasurementBlocks blocks;
-    SparseJacobian sparse;
-    Eigen::Vector4d residual;
+    // Blocks/sparse/residual are not cached here: the iterated update
+    // relinearizes every accepted observation fresh each pass (see Phase B),
+    // so a Phase-A snapshot of them would go stale after iteration 0.
+    StereoObservation observation;
     // Per-observation covariance after covariance_scale is applied; distinct
-    // from the function's shared base pixel_covariance argument.
+    // from the function's shared base pixel_covariance argument. This does
+    // not depend on the linearization point, so it is safe to precompute
+    // once in Phase A and reuse across iterations.
     Eigen::Matrix4d observation_covariance;
     LandmarkId id;
 };
@@ -171,6 +174,10 @@ ParseResult<StereoUpdateResult> update_stereo_frame(
         return std::unexpected(std::format(
             "chi_square_threshold: expected a non-negative value, found {}",
             options.chi_square_threshold));
+    }
+    if (options.max_iterations < 1) {
+        return std::unexpected(std::format(
+            "max_iterations: expected >= 1, found {}", options.max_iterations));
     }
 
     StereoUpdateResult result;
@@ -249,9 +256,7 @@ ParseResult<StereoUpdateResult> update_stereo_frame(
         diagnostics.outcome = ObservationOutcome::kApplied;
         result.diagnostics.push_back(diagnostics);
         prepared.push_back(PreparedObservation{
-            .blocks = *blocks,
-            .sparse = sparse,
-            .residual = residual,
+            .observation = observation,
             .observation_covariance = observation_covariance,
             .id = observation.id,
         });
@@ -264,61 +269,98 @@ ParseResult<StereoUpdateResult> update_stereo_frame(
     // The sweep is order-independent in exact arithmetic but not bitwise, so fix
     // the order to keep runs reproducible.
     std::sort(prepared.begin(), prepared.end(), [](const auto& left, const auto& right) {
-        return left.blocks.landmark_offset < right.blocks.landmark_offset;
+        return left.id < right.id;
     });
 
-    // Phase B: sequential updates against a nominal state that stays frozen, so
-    // every Jacobian keeps the linearization point captured in phase A.
-    auto covariance = state.active_covariance();
-    Eigen::VectorXd error_state = Eigen::VectorXd::Zero(dimension);
+    // Phase B: relinearize around the current iterated estimate, but start each
+    // covariance calculation from the same prior. This is a single measurement
+    // update, not repeated assimilation of the frame.
+    Eigen::VectorXd iterate = Eigen::VectorXd::Zero(dimension);
+    Eigen::MatrixXd covariance(dimension, dimension);
     MeasurementRow row_block(kStereoMeasurementDim, dimension);
     GainColumn gain(dimension, kStereoMeasurementDim);
     GainColumn joseph_column(dimension, kStereoMeasurementDim);
 
-    for (const auto& entry : prepared) {
-        const int offset = entry.blocks.landmark_offset;
-
-        // The innovation subtracts the error already absorbed by earlier
-        // landmarks. Without this term the sweep double-counts those
-        // corrections and stops matching a batch update.
-        Eigen::Matrix<double, kMeasurementSparseColumns, 1> compact_error;
-        compact_error.head<kLandmarkDim>() = error_state.segment<kLandmarkDim>(kPositionIndex);
-        compact_error.segment<kLandmarkDim>(kLandmarkDim) =
-            error_state.segment<kLandmarkDim>(kOrientationIndex);
-        compact_error.tail<kLandmarkDim>() = error_state.segment<kLandmarkDim>(offset);
-        const Eigen::Vector4d innovation = entry.residual - entry.sparse * compact_error;
-
-        sparse_h_times_p(entry.blocks, covariance, row_block);
-        const Eigen::Matrix4d innovation_covariance =
-            gather_columns(row_block, offset) * entry.sparse.transpose() + entry.observation_covariance;
-        const Eigen::LLT<Eigen::Matrix4d> factorization(innovation_covariance);
-        if (factorization.info() != Eigen::Success) {
-            return std::unexpected(std::format(
-                "observation {}: innovation covariance is not positive definite", entry.id));
+    for (int iteration = 0; iteration < options.max_iterations; ++iteration) {
+        SlamState linearization_state = state;
+        if (const auto injected = linearization_state.inject_error_state(iterate); !injected) {
+            return std::unexpected(injected.error());
         }
+        covariance = state.active_covariance();
+        Eigen::VectorXd error_state = Eigen::VectorXd::Zero(dimension);
 
-        // K = P H^T S^-1 = (H P)^T S^-1, using the symmetry of P and S.
-        gain = factorization.solve(row_block).transpose();
-        error_state.noalias() += gain * innovation;
+        for (const auto& entry : prepared) {
+            const auto offset = linearization_state.landmark_offset(entry.id);
+            const auto position = linearization_state.landmark_position(entry.id);
+            if (!offset || !position) {
+                return std::unexpected(std::format(
+                    "observation {}: landmark disappeared during iteration", entry.id));
+            }
+            const auto blocks = make_stereo_measurement_blocks(
+                linearization_state.robot, *position, cam0, cam1, *offset);
+            if (!blocks || !blocks->visible) {
+                return std::unexpected(std::format(
+                    "observation {}: became invalid during iteration", entry.id));
+            }
+            const SparseJacobian sparse = compact_jacobian(*blocks);
+            Eigen::Vector4d measurement;
+            measurement << entry.observation.pixel_cam0, entry.observation.pixel_cam1;
+            // z - h(x_i) + H_i delta_i expresses this local linearization in
+            // coordinates of the frame-entry nominal state.
+            Eigen::Matrix<double, kMeasurementSparseColumns, 1> compact_iterate;
+            compact_iterate.head<kLandmarkDim>() = iterate.segment<kLandmarkDim>(kPositionIndex);
+            compact_iterate.segment<kLandmarkDim>(kLandmarkDim) =
+                iterate.segment<kLandmarkDim>(kOrientationIndex);
+            compact_iterate.tail<kLandmarkDim>() = iterate.segment<kLandmarkDim>(*offset);
+            const Eigen::Vector4d linearized_residual =
+                measurement - blocks->prediction + sparse * compact_iterate;
 
-        covariance.noalias() -= gain * row_block;
-        if (options.use_joseph_form) {
-            // Factored Joseph, with M = P - K (H P) already written in place:
-            // P <- M - (M H^T) K^T + K R K^T. Do not algebraically simplify this
-            // back to P - K (H P); under the optimal gain the two are equal in
-            // exact arithmetic, and computing it this way is the entire point.
-            sparse_m_times_h_transpose(entry.blocks, entry.sparse, covariance, joseph_column);
-            covariance.noalias() -= joseph_column * gain.transpose();
-            covariance.noalias() += gain * entry.observation_covariance * gain.transpose();
+            Eigen::Matrix<double, kMeasurementSparseColumns, 1> compact_error;
+            compact_error.head<kLandmarkDim>() = error_state.segment<kLandmarkDim>(kPositionIndex);
+            compact_error.segment<kLandmarkDim>(kLandmarkDim) =
+                error_state.segment<kLandmarkDim>(kOrientationIndex);
+            compact_error.tail<kLandmarkDim>() = error_state.segment<kLandmarkDim>(*offset);
+            const Eigen::Vector4d innovation = linearized_residual - sparse * compact_error;
+
+            sparse_h_times_p(*blocks, covariance, row_block);
+            const Eigen::Matrix4d innovation_covariance =
+                gather_columns(row_block, *offset) * sparse.transpose() + entry.observation_covariance;
+            const Eigen::LLT<Eigen::Matrix4d> factorization(innovation_covariance);
+            if (factorization.info() != Eigen::Success) {
+                return std::unexpected(std::format(
+                    "observation {}: innovation covariance is not positive definite", entry.id));
+            }
+
+            // K = P H^T S^-1 = (H P)^T S^-1, using the symmetry of P and S.
+            gain = factorization.solve(row_block).transpose();
+            error_state.noalias() += gain * innovation;
+
+            covariance.noalias() -= gain * row_block;
+            if (options.use_joseph_form) {
+                // Factored Joseph, with M = P - K (H P) already written in place:
+                // P <- M - (M H^T) K^T + K R K^T. Do not algebraically simplify this
+                // back to P - K (H P); under the optimal gain the two are equal in
+                // exact arithmetic, and computing it this way is the entire point.
+                sparse_m_times_h_transpose(*blocks, sparse, covariance, joseph_column);
+                covariance.noalias() -= joseph_column * gain.transpose();
+                covariance.noalias() += gain * entry.observation_covariance * gain.transpose();
+            }
+            symmetrize(covariance);
+            // Count once per accepted observation, not once per relinearization
+            // sweep, so applied_count stays a frame-level count regardless of
+            // max_iterations.
+            if (iteration == options.max_iterations - 1) {
+                ++result.applied_count;
+            }
         }
-        symmetrize(covariance);
-        ++result.applied_count;
+        iterate = std::move(error_state);
     }
 
     // Phase C: one injection and one covariance reset for the whole frame.
-    if (const auto injected = state.inject_error_state(error_state); !injected) {
+    state.active_covariance() = covariance;
+    if (const auto injected = state.inject_error_state(iterate); !injected) {
         return std::unexpected(injected.error());
     }
-    result.error_state = std::move(error_state);
+    result.error_state = std::move(iterate);
     return result;
 }

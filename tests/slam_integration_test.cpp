@@ -177,11 +177,11 @@ SyntheticTrajectory integration_trajectory() {
 
 // Initial uncertainty, and the distribution the initial error is actually drawn
 // from. NEES is only meaningful if these two agree.
-ImuStateCovariance integration_initial_covariance() {
+ImuStateCovariance integration_initial_covariance(double orientation_stddev = 0.01) {
     ImuStateCovariance covariance = ImuStateCovariance::Zero();
     covariance.diagonal().segment<3>(0).setConstant(0.02 * 0.02);
     covariance.diagonal().segment<3>(3).setConstant(0.02 * 0.02);
-    covariance.diagonal().segment<3>(6).setConstant(0.01 * 0.01);
+    covariance.diagonal().segment<3>(6).setConstant(orientation_stddev * orientation_stddev);
     covariance.diagonal().segment<3>(9).setConstant(0.02 * 0.02);
     covariance.diagonal().segment<3>(12).setConstant(0.002 * 0.002);
     return covariance;
@@ -214,6 +214,11 @@ struct RunConfig {
     bool enable_updates = true;
     double duration_seconds = kDurationSeconds;
     double chi_square_threshold = 9.4877;
+    int update_iterations = 1;
+    // Experimental controls: truth and filter initialization remain matched;
+    // measurement_noise_scale changes only the filter's assumed pixel noise.
+    double initial_orientation_stddev = 0.01;
+    double measurement_noise_scale = 1.0;
 };
 
 FilterRun run_filter(const RunConfig& config) {
@@ -250,7 +255,8 @@ FilterRun run_filter(const RunConfig& config) {
 
     // Draw the initial error from the covariance the filter is given.
     GaussianSampler sampler{seed + 7};
-    const ImuStateCovariance initial_covariance = integration_initial_covariance();
+    const ImuStateCovariance initial_covariance =
+        integration_initial_covariance(config.initial_orientation_stddev);
     const GroundTruthState truth = trajectory.state_at(0.0);
     NominalState initial{
         .position = truth.position
@@ -270,7 +276,7 @@ FilterRun run_filter(const RunConfig& config) {
     SlamState state = std::move(*state_result);
 
     const Eigen::Matrix4d pixel_covariance =
-        kPixelStddev * kPixelStddev * Eigen::Matrix4d::Identity();
+        config.measurement_noise_scale * kPixelStddev * kPixelStddev * Eigen::Matrix4d::Identity();
     const double timestep = 1.0 / kImuRateHz;
 
     // Group observations by frame timestamp, in stream order.
@@ -311,7 +317,10 @@ FilterRun run_filter(const RunConfig& config) {
             const auto update_start = std::chrono::steady_clock::now();
             const auto result = update_stereo_frame(
                 state, known, cam0, cam1, pixel_covariance,
-                UpdateOptions{.chi_square_threshold = config.chi_square_threshold});
+                UpdateOptions{
+                    .chi_square_threshold = config.chi_square_threshold,
+                    .max_iterations = config.update_iterations,
+                });
             run.update_nanoseconds += static_cast<double>(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
                     std::chrono::steady_clock::now() - update_start).count());
@@ -609,12 +618,39 @@ TEST(SlamClosedLoopTest, DISABLED_NeesDiagnosticSweep) {
                   << " position_error_m=" << error << '\n';
     }
 
-    // The decisive one: NEES against the magnitude of the linearization error.
-    // Convergence toward consistency as the initial error shrinks is the
-    // signature of second-order linearization error rather than a defect.
-    // Requires editing integration_initial_covariance to vary; recorded in
-    // BENCHMARKS.md as initial tilt sigma 0.01 / 0.003 / 0.001 rad giving total
-    // NEES 24.23 / 17.24 / 15.92 and tilt NEES 4.81 / 2.65 / 1.86.
+    std::cout << "--- NEES vs iterated camera update (linearization experiment) ---\n";
+    for (const int iterations : {1, 2, 3, 5, 8}) {
+        double nees = 0.0;
+        double update_ns = 0.0;
+        double update_frames = 0.0;
+        for (int run = 0; run < kRuns; ++run) {
+            const FilterRun result = run_filter(RunConfig{
+                .seed = static_cast<std::uint64_t>(1000 + run * 17),
+                .update_iterations = iterations,
+            });
+            nees += result.robot_nees;
+            update_ns += result.update_nanoseconds;
+            update_frames += result.update_frames;
+        }
+        std::cout << "iterations=" << iterations << " nees=" << nees / kRuns
+                  << " update_ns_per_frame=" << update_ns / update_frames << '\n';
+    }
+
+    std::cout << "--- NEES vs matched initialization quality ---\n";
+    for (const double orientation_stddev : {0.01, 0.003, 0.001}) {
+        const auto [nees, error] = average(RunConfig{
+            .initial_orientation_stddev = orientation_stddev,
+        });
+        std::cout << "initial_orientation_stddev_rad=" << orientation_stddev
+                  << " nees=" << nees << " position_error_m=" << error << '\n';
+    }
+
+    std::cout << "--- NEES vs assumed pixel-noise inflation (calibration sensitivity) ---\n";
+    for (const double scale : {1.0, 1.5, 2.0, 3.0, 5.0}) {
+        const auto [nees, error] = average(RunConfig{.measurement_noise_scale = scale});
+        std::cout << "measurement_noise_scale=" << scale << " nees=" << nees
+                  << " position_error_m=" << error << '\n';
+    }
 
     std::cout << "--- propagation-only control at each horizon ---\n";
     for (const double duration : {0.5, 1.0, 2.0, 4.0}) {
