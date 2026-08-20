@@ -107,6 +107,7 @@ TEST(DatasetParserTest, ParsesEuRocSequenceDirectory) {
     EXPECT_EQ(dataset->stereo_pairs[0].timestamp, 1403636579763555584);
     EXPECT_EQ(dataset->stereo_pairs[0].cam0_image_path, sequence_root / "mav0/cam0/data/1403636579763555584.png");
     EXPECT_EQ(dataset->stereo_pairs[0].cam1_image_path, sequence_root / "mav0/cam1/data/1403636579763555584.png");
+    EXPECT_TRUE(dataset->stereo_frame_gaps.empty());
     ASSERT_EQ(dataset->imu_measurements.size(), 2);
     EXPECT_EQ(dataset->imu_measurements[0].timestamp, 1403636579758555392);
     EXPECT_DOUBLE_EQ(dataset->imu_measurements[0].angular_velocity.x(), 0.1);
@@ -197,8 +198,10 @@ TEST(DatasetParserTest, RejectsWrongGroundTruthFieldCount) {
     EXPECT_EQ(dataset.error(), "ground truth state line 3 must contain 17 fields, got 3");
 }
 
-TEST(DatasetParserTest, RejectsMismatchedStereoTimestamps) {
-    const auto sequence_root = std::filesystem::temp_directory_path() / "ekf_slam_bad_stereo_sequence";
+TEST(DatasetParserTest, DropsUnmatchedCameraFramesInsteadOfFailing) {
+    // cam0: T1 T2    T4 T5   cam1: T1    T3 T4
+    // T1 and T4 pair; T2, T3, and the trailing T5 are gaps on either side.
+    const auto sequence_root = std::filesystem::temp_directory_path() / "ekf_slam_stereo_gap_sequence";
     write_euroc_sequence(
         sequence_root,
         kCameraYaml,
@@ -206,21 +209,34 @@ TEST(DatasetParserTest, RejectsMismatchedStereoTimestamps) {
         kImuYaml,
         R"(
 #timestamp [ns],filename
+1403636579713555584,1403636579713555584.png
 1403636579763555584,1403636579763555584.png
+1403636579863555584,1403636579863555584.png
+1403636579913555584,1403636579913555584.png
 )",
         R"(
 #timestamp [ns],filename
+1403636579713555584,1403636579713555584.png
 1403636579813555456,1403636579813555456.png
+1403636579863555584,1403636579863555584.png
 )",
         kImuCsv,
         kGroundTruthCsv);
 
     const auto dataset = parse_dataset(sequence_root);
 
-    ASSERT_FALSE(dataset);
-    EXPECT_EQ(
-        dataset.error(),
-        "cam0 timestamp 1403636579763555584 does not match cam1 timestamp 1403636579813555456");
+    ASSERT_TRUE(dataset) << dataset.error();
+    ASSERT_EQ(dataset->stereo_pairs.size(), 2);
+    EXPECT_EQ(dataset->stereo_pairs[0].timestamp, 1403636579713555584);
+    EXPECT_EQ(dataset->stereo_pairs[1].timestamp, 1403636579863555584);
+
+    ASSERT_EQ(dataset->stereo_frame_gaps.size(), 3);
+    EXPECT_EQ(dataset->stereo_frame_gaps[0].timestamp, 1403636579763555584);
+    EXPECT_TRUE(dataset->stereo_frame_gaps[0].cam1_missing);
+    EXPECT_EQ(dataset->stereo_frame_gaps[1].timestamp, 1403636579813555456);
+    EXPECT_FALSE(dataset->stereo_frame_gaps[1].cam1_missing);
+    EXPECT_EQ(dataset->stereo_frame_gaps[2].timestamp, 1403636579913555584);
+    EXPECT_TRUE(dataset->stereo_frame_gaps[2].cam1_missing);
 }
 
 TEST(DatasetParserTest, SmokeParsesMh01EasyDataset) {

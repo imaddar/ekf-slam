@@ -575,28 +575,37 @@ set:
 | MH_01_easy | 0.177 | 0.0138 | 6,658 | 41.0 |
 | MH_02_easy | 0.133 | 0.0107 | 4,542 | 40.0 |
 | MH_03_medium | 0.156 | 0.0327 | 4,646 | 41.8 |
+| MH_04_difficult | 0.485 | 0.0346 | 12,131 | 39.0 |
 | MH_05_difficult | 0.459 | 0.0289 | 18,118 | 39.0 |
 
-Two results, one clean and one not. Timing generalizes cleanly: all four stay
+Two results, one clean and one not. Timing generalizes cleanly: all five stay
 inside the `50 ms` budget with 10-15% headroom, so a threshold tuned on one
 sequence's motion and feature density did not overfit to it. Accuracy does
 not: `MH_03_medium` matches the `easy` pair on ATE but has 2.4-3x worse RPE,
-and `MH_05_difficult` is 2.6-3.5x worse on both ATE and NEES than any other
-sequence. That is the expected shape given the yaw-NEES finding above — more
-aggressive motion excites the second-order linearization error harder — not a
-new defect, but it is a real number I would not have without running it, and
-a good example of why "it works on my one sequence" is not a claim worth
-making.
+and both `difficult` sequences are 2.6-3.7x worse on ATE and 2.7-4.0x worse
+on NEES than the best `easy` result. That is the expected shape given the
+yaw-NEES finding above — more aggressive motion excites the second-order
+linearization error harder — not a new defect, but it is a real number I
+would not have without running it, and a good example of why "it works on my
+one sequence" is not a claim worth making.
 
-**`MH_04_difficult` does not run at all**, and not because of the filter:
-`unzip -l` on the raw EuRoC download shows cam0 has 2,033 frames to cam1's
-2,032 — one image is simply missing from the vendor archive. The parser hard
-fails on that mismatch by design (`ARCHITECTURE.md` documents "camera frame
-gap → warn, continue" as a known gap, not yet implemented). Worth having in
-the back pocket for a "how do you handle bad input data" question: the honest
-answer here is "the pipeline detects it and refuses to silently drop a frame,
-and the graceful-degradation path is a scoped, not-yet-built feature," which
-is a better answer than either crashing unpredictably or getting lucky.
+**`MH_04_difficult` did not run at all, the first time.** `unzip -l` on the
+raw EuRoC download shows cam0 has 2,033 frames to cam1's 2,032 — one image is
+simply missing from the vendor archive, not from anything local. The parser
+hard failed on that mismatch by design; nothing implemented the "camera frame
+gap → warn, continue" behavior `scope.md` had specified from the start. Fixing
+it was a small, targeted change: `pair_stereo_frames(...)` walks both
+cameras' timestamps with a single ascending two-pointer merge instead of
+assuming index alignment, and any frame with no counterpart in the other
+stream is dropped into a new `Dataset::stereo_frame_gaps` list — a value the
+caller can inspect or print, not a side-effecting log call buried in a parser
+that otherwise has none. `mh01_benchmark` prints one warning line per gap and
+keeps going. MH_04_difficult now completes end to end and lands in the same
+accuracy range as MH_05, the other `difficult` sequence — the missing frame
+was cosmetic to the estimator, once the pipeline was allowed to skip it. This
+is the same lesson as the initialization work in the other direction: build
+the thing that turns "real data is going to be imperfect" from a hand-wave
+into code with a test, rather than assuming it away.
 
 ### Runtime
 

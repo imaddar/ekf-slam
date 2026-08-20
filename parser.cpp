@@ -24,7 +24,7 @@ ParseResult<Dataset> parse_dataset(const std::filesystem::path& sequence_root) {
     TRY(cam0_calibration, parser_detail::parse_camera_yaml(cam0_root / "sensor.yaml"));
     TRY(cam1_calibration, parser_detail::parse_camera_yaml(cam1_root / "sensor.yaml"));
     TRY(imu_calibration, parser_detail::parse_imu_yaml(imu0_root / "sensor.yaml"));
-    TRY(stereo_pairs, parser_detail::parse_stereo_pairs_csv(
+    TRY(stereo_pairing, parser_detail::parse_stereo_pairs_csv(
                           cam0_root / "data.csv",
                           cam0_root / "data",
                           cam1_root / "data.csv",
@@ -37,7 +37,8 @@ ParseResult<Dataset> parse_dataset(const std::filesystem::path& sequence_root) {
         .cam0_calibration = cam0_calibration,
         .cam1_calibration = cam1_calibration,
         .imu_calibration = imu_calibration,
-        .stereo_pairs = std::move(stereo_pairs),
+        .stereo_pairs = std::move(stereo_pairing.pairs),
+        .stereo_frame_gaps = std::move(stereo_pairing.gaps),
         .imu_measurements = std::move(imu_measurements),
         .ground_truth_states = std::move(ground_truth_states),
     };

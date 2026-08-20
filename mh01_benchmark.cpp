@@ -98,6 +98,10 @@ int main(int argc, char** argv) {
     }
     const auto dataset = parse_dataset(std::filesystem::path{EKF_SLAM_SOURCE_DIR} / "datasets/machine_hall" / sequence_name);
     if (!dataset) return fail(dataset.error());
+    for (const StereoFrameGap& gap : dataset->stereo_frame_gaps) {
+        std::cerr << "mh01_benchmark: warning: camera frame gap at " << gap.timestamp << ", "
+                  << (gap.cam1_missing ? "cam1" : "cam0") << " has no matching frame\n";
+    }
     const auto rectification = make_stereo_rectification(dataset->cam0_calibration, dataset->cam1_calibration);
     if (!rectification) return fail(rectification.error());
     auto frontend_result = FeatureFrontend::create(*rectification, FrontendOptions{

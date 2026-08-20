@@ -37,7 +37,8 @@ Single-threaded, runs against recorded EuRoC sequences. Deliverable: ATE/RPE/NEE
 - [x] `GroundTruthState` — timestamp, position, orientation, velocity, biases (CSV)
 - [x] YAML parsing for EuRoC `sensor.yaml` files with T_BS shape validation
 - [x] Error handling: fail fast on missing files and malformed YAML/CSV records
-- [ ] Error handling: detect IMU gaps against the expected rate; survive camera frame gaps
+- [x] Error handling: survive camera frame gaps (warn, continue)
+- [ ] Error handling: detect IMU gaps against the expected rate
 
 #### Week 3–5: IMU Propagation
 - [x] ESEKF state and covariance definition
@@ -92,8 +93,7 @@ Single-threaded, runs against recorded EuRoC sequences. Deliverable: ATE/RPE/NEE
 | Missing calibration file | Hard fail |
 | Malformed YAML | Hard fail |
 | IMU data gap | Hard fail |
-| Stereo timestamp mismatch | Hard fail |
-| Camera frame gap | Warn, continue |
+| Camera frame gap (stereo timestamp mismatch) | Warn, continue |
 | Bad IMU record | Hard fail |
 
 ---

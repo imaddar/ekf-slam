@@ -211,37 +211,44 @@ ParseResult<std::vector<CameraFrame>> parse_camera_frames_csv_content(
     return frames;
 }
 
-ParseResult<std::vector<StereoPair>> pair_stereo_frames(
+// EuRoC CSVs are chronological, so a single ascending merge finds every
+// matching timestamp; a frame either side's pointer steps past without
+// matching is a camera frame gap, not a parse failure (scope.md: "camera
+// frame gap -> warn, continue").
+parser_detail::StereoPairing pair_stereo_frames(
     std::vector<CameraFrame> cam0_frames,
     std::vector<CameraFrame> cam1_frames) {
-    if (cam0_frames.size() != cam1_frames.size()) {
-        return std::unexpected(std::format(
-            "cam0 and cam1 must contain the same number of frames, got {} and {}",
-            cam0_frames.size(),
-            cam1_frames.size()));
-    }
+    parser_detail::StereoPairing result;
+    result.pairs.reserve(std::min(cam0_frames.size(), cam1_frames.size()));
 
-    std::vector<StereoPair> pairs;
-    pairs.reserve(cam0_frames.size());
-    for (std::size_t index = 0; index < cam0_frames.size(); ++index) {
-        const auto& cam0_frame = cam0_frames[index];
-        const auto& cam1_frame = cam1_frames[index];
-        // Stereo CSVs should align by index, but compare timestamps so a shifted file fails loudly.
-        if (cam0_frame.timestamp != cam1_frame.timestamp) {
-            return std::unexpected(std::format(
-                "cam0 timestamp {} does not match cam1 timestamp {}",
-                cam0_frame.timestamp,
-                cam1_frame.timestamp));
+    std::size_t cam0_index = 0, cam1_index = 0;
+    while (cam0_index < cam0_frames.size() && cam1_index < cam1_frames.size()) {
+        const CameraFrame& cam0_frame = cam0_frames[cam0_index];
+        const CameraFrame& cam1_frame = cam1_frames[cam1_index];
+        if (cam0_frame.timestamp == cam1_frame.timestamp) {
+            result.pairs.push_back(StereoPair{
+                .timestamp = cam0_frame.timestamp,
+                .cam0_image_path = std::move(cam0_frames[cam0_index].image_path),
+                .cam1_image_path = std::move(cam1_frames[cam1_index].image_path),
+            });
+            ++cam0_index; ++cam1_index;
+        } else if (cam0_frame.timestamp < cam1_frame.timestamp) {
+            result.gaps.push_back(StereoFrameGap{.timestamp = cam0_frame.timestamp, .cam1_missing = true});
+            ++cam0_index;
+        } else {
+            result.gaps.push_back(StereoFrameGap{.timestamp = cam1_frame.timestamp, .cam1_missing = false});
+            ++cam1_index;
         }
-
-        pairs.push_back(StereoPair{
-            .timestamp = cam0_frame.timestamp,
-            .cam0_image_path = std::move(cam0_frames[index].image_path),
-            .cam1_image_path = std::move(cam1_frames[index].image_path),
-        });
+    }
+    // A trailing run on either side has no counterpart left to match at all.
+    for (; cam0_index < cam0_frames.size(); ++cam0_index) {
+        result.gaps.push_back(StereoFrameGap{.timestamp = cam0_frames[cam0_index].timestamp, .cam1_missing = true});
+    }
+    for (; cam1_index < cam1_frames.size(); ++cam1_index) {
+        result.gaps.push_back(StereoFrameGap{.timestamp = cam1_frames[cam1_index].timestamp, .cam1_missing = false});
     }
 
-    return pairs;
+    return result;
 }
 
 }  // namespace
@@ -272,7 +279,7 @@ ParseResult<std::vector<GroundTruthState>> parse_ground_truth_csv(const std::fil
     return states;
 }
 
-ParseResult<std::vector<StereoPair>> parse_stereo_pairs_csv(
+ParseResult<StereoPairing> parse_stereo_pairs_csv(
     const std::filesystem::path& cam0_csv_path,
     const std::filesystem::path& cam0_image_dir,
     const std::filesystem::path& cam1_csv_path,

@@ -206,9 +206,10 @@ generators validate their configuration and return `ParseResult<T>`.
 Current coverage validates those behaviors through the public `parse_dataset`
 entry point: successful camera/IMU YAML parsing, camera calibration
 transform-shape rejection, successful IMU/ground-truth/stereo CSV parsing, IMU
-and ground-truth field-count rejection, stereo timestamp mismatch rejection, and
-top-level dataset loading from both a temporary EuRoC-like directory and the
-checked-in `datasets/machine_hall/MH_01_easy` sequence.
+and ground-truth field-count rejection, camera frame gaps dropped into
+`stereo_frame_gaps` (both directions and a trailing gap) rather than failing
+the parse, and top-level dataset loading from both a temporary EuRoC-like
+directory and the checked-in `datasets/machine_hall/MH_01_easy` sequence.
 `tests/propagation_test.cpp` verifies stationary behavior, acceleration
 integration, orientation integration, bias removal, covariance transition
 behavior, process-noise block placement, symmetry, and positive
@@ -240,8 +241,11 @@ agreement between injected noise and the calibration densities.
 - `CameraCalibration` and `ImuCalibration` — YAML calibration output structs.
 - `StereoPair`, `ImuMeasurement`, and `GroundTruthState` — parsed sensor and
   label records.
+- `StereoFrameGap` — a camera frame present in one of cam0/cam1's CSV with no
+  matching timestamp in the other; `cam1_missing` says which stream lacked it.
 - `Dataset` — top-level parsed dataset containing `sequence_root`, the
-  calibration structs, stereo pairs, IMU measurements, and ground-truth states.
+  calibration structs, stereo pairs, camera frame gaps, IMU measurements, and
+  ground-truth states.
 
 ### Entry Points
 
@@ -674,6 +678,20 @@ work.
   of YAML correctly and cost less code, but would report file-format errors in
   its own vocabulary and add a dependency to cross-compile. This choice is only
   defensible while the input stays EuRoC-shaped.
+- **Camera frame gap tolerance.** `pair_stereo_frames(...)` used to hard-fail
+  whenever cam0 and cam1 had different frame counts, which blocked
+  `MH_04_difficult` outright: its raw EuRoC download is missing exactly one
+  cam1 frame (`unzip -l` confirms the defect predates any local processing).
+  It now walks both CSVs' ascending timestamps with a single two-pointer merge
+  and drops any frame with no counterpart into `Dataset::stereo_frame_gaps`
+  instead of failing, matching the "camera frame gap → warn, continue" policy
+  in [scope.md](scope.md); `mh01_benchmark` prints one warning line per gap.
+  This is deliberately narrower than a full missing-data recovery: it does not
+  interpolate, does not bound how large a gap is tolerable, and treats a
+  fully disjoint pair of streams the same as a single dropped frame (zero
+  pairs, all frames reported as gaps) rather than escalating that back to an
+  error. IMU gaps are not covered by this and still have no rate-based
+  detection.
 
 ### Camera measurement model
 
@@ -945,12 +963,15 @@ name the field, the line number (for CSV), and what was expected vs. found
 (e.g. `"T_BS must be 4x4, got 4x3"`, `"IMU measurement line 3 must contain 7
 fields, got 3"`). This matches the hard-fail-by-default policy in
 [scope.md](scope.md): missing files, malformed YAML, and malformed CSV records
-all hard fail. Nothing implements the "camera frame gap → warn, continue"
-behavior yet.
+all hard fail. Camera frame gaps are the one documented exception: a
+timestamp present in only one of cam0/cam1's CSVs is dropped into
+`Dataset::stereo_frame_gaps` rather than failing the parse (see the
+Camera frame gap tolerance design decision). IMU gap detection against the
+expected rate is not implemented.
 
 ## Tests
 
-132 GoogleTest cases across fourteen binaries, run through CTest (130 active;
+143 GoogleTest cases across eighteen binaries, run through CTest (141 active;
 two NEES diagnostics intentionally disabled):
 
 - `tests/parser_test.cpp` — inline YAML/CSV fixtures plus a smoke test against
