@@ -12,6 +12,7 @@ is measured, why it matters, and where the value comes from.
 | Real MH_01 frontend preliminary run | `tests/euroc_frontend_test.cpp` | Full MH_01, 3,682 stereo frames; truth-initialized, 100-landmark budget | Peak 233 tracks; 24,103 augmentations; 187,726 applied and 57,964 gated updates; final position error `2.02 m`; frontend `101.2 ms/frame`, update `5.71 ms/frame` | Completes stably; misses 20 Hz budget and needs tracking/noise tuning |
 | MH_01 pixel-noise sensitivity | `tests/euroc_frontend_test.cpp` | First 100 frames; independent scalar detector-noise sweep | `sigma=0.5 px`: 1,190 gated / 2,423 applied, `2.87 cm`; `sigma=1.0 px`: 758 gated / 3,116 applied, `4.94 cm` | Neither is a calibrated model; do not tune by gate count alone |
 | MH_01 full trajectory benchmark | `mh01_benchmark.cpp` | Full 3,682-frame filter pass; 3,638 camera timestamps shared with ground truth; truth-initialized, `sigma=0.5 px`, 100-landmark budget | ATE position RMSE `0.696915 m`; 1 s RPE translation RMSE `0.0484806 m/s`; rotation RMSE `0.00552155 rad/s`; mean 15-dof NEES `217,927` | Completes, but covariance is severely over-confident; not a consistency pass |
+| MH_01 R-calibration prefix | `mh01_benchmark.cpp` | First 100 frames, fixed Q and frontend; scalar pixel-sigma sweep | 0.5 px: NEES `1897`; 1.0 px: `293`; 1.5 px: `222`; 2.0 px: `191` | R is too small, but scalar inflation alone does not restore consistency; see `R_CALIBRATION_MH01.md` |
 
 | Metric | Source | Scenario | Current value / bound | Status |
 |---|---|---|---|---|

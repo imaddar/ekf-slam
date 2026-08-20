@@ -135,6 +135,11 @@ per-observation diagnostics (outcome, Mahalanobis distance, prior residual) and
 the injected error state. Observations of unknown landmarks are skipped rather
 than treated as errors.
 
+`StereoObservation::covariance_scale` optionally multiplies the frame's base
+pixel covariance. The experimental frontend uses it to reduce information from
+a recent, low-parallax re-observation; both gating and the covariance update use
+the same scaled covariance.
+
 `augmentation_jacobians.hpp/cpp` defines the analytical metric XYZ augmentation
 derivatives. It uses the right/local orientation convention and the established
 propagation ordering `[position, velocity, orientation, accelerometer bias,
