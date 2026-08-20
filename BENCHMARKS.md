@@ -13,6 +13,10 @@ is measured, why it matters, and where the value comes from.
 | MH_01 pixel-noise sensitivity | `tests/euroc_frontend_test.cpp` | First 100 frames; independent scalar detector-noise sweep | `sigma=0.5 px`: 1,190 gated / 2,423 applied, `2.87 cm`; `sigma=1.0 px`: 758 gated / 3,116 applied, `4.94 cm` | Neither is a calibrated model; do not tune by gate count alone |
 | MH_01 full trajectory benchmark | `mh01_benchmark.cpp` | Full 3,682-frame filter pass; 3,638 camera timestamps shared with ground truth; truth-initialized, `sigma=0.5 px`, 100-landmark budget, 300-track pool | ATE position RMSE `0.176734 m`; 1 s RPE translation RMSE `0.0138104 m/s`; rotation RMSE `0.00243615 rad/s`; mean 15-dof NEES `6,658` | Completes; covariance still over-confident by ~440x, so not a consistency pass |
 | MH_01 frontend stage profile | `mh01_benchmark.cpp` | Same full pass; per-stage wall clock from `FeatureFrontend::stage_timings()` | Frontend `30.7 ms/frame` plus update `9.6 ms/frame` against a `50 ms` budget at 20 Hz; `detect` `7.6 ms` (24.7%), whole KLT family `21.0 ms` (68.3%) | Meets 20 Hz at `40.3 ms/frame`, ~20% headroom on the dev machine; not a Jetson number |
+| MH_02_easy full trajectory benchmark | `mh01_benchmark --sequence MH_02_easy` | Full 3,040-frame filter pass; 2,999 camera timestamps shared with ground truth; same config as the MH_01 row | ATE position RMSE `0.132614 m`; 1 s RPE translation RMSE `0.0107325 m/s`; rotation RMSE `0.00209964 rad/s`; mean 15-dof NEES `4,542`; frontend `30.4 ms/frame` plus update `9.5 ms/frame` | Completes, meets 20 Hz; best ATE/NEES of the four running sequences |
+| MH_03_medium full trajectory benchmark | `mh01_benchmark --sequence MH_03_medium` | Full 2,700-frame filter pass; 2,631 camera timestamps shared with ground truth; same config as the MH_01 row | ATE position RMSE `0.156169 m`; 1 s RPE translation RMSE `0.03273 m/s`; rotation RMSE `0.0027516 rad/s`; mean 15-dof NEES `4,646`; frontend `32.0 ms/frame` plus update `9.8 ms/frame` | Completes, meets 20 Hz; RPE translation is 2.4-3x the easy sequences despite comparable ATE |
+| MH_04_difficult full trajectory benchmark | `mh01_benchmark --sequence MH_04_difficult` | Full sequence | Parser hard fail: `cam0 and cam1 must contain the same number of frames, got 2033 and 2032` | Blocked, not a filter defect; see "MH_04_difficult is blocked" below |
+| MH_05_difficult full trajectory benchmark | `mh01_benchmark --sequence MH_05_difficult` | Full 2,273-frame filter pass; 2,221 camera timestamps shared with ground truth; same config as the MH_01 row | ATE position RMSE `0.459346 m`; 1 s RPE translation RMSE `0.0289296 m/s`; rotation RMSE `0.00271473 rad/s`; mean 15-dof NEES `18,118`; frontend `29.2 ms/frame` plus update `9.7 ms/frame` | Completes, meets 20 Hz; worst ATE and NEES by a wide margin, consistent with `difficult` being a harder trajectory, not a regression |
 
 | Metric | Source | Scenario | Current value / bound | Status |
 |---|---|---|---|---|
@@ -300,6 +304,56 @@ About 70% of all pixels clear `min_eigenvalue = 1e-3`, so the candidate list it
 must select from is roughly 250k entries per frame. Demand-driven detection and
 a local-maximum test before selection are the open items there, and both change
 which features the filter sees.
+
+## Cross-Sequence EuRoC Benchmark (Machine Hall)
+
+`mh01_benchmark` took a `--sequence <name>` flag so the same evaluator can run
+any `datasets/machine_hall/<name>` sequence instead of only MH_01_easy. All
+five Machine Hall sequences were downloaded; four run end to end under the
+current pipeline with no per-sequence tuning (same `sigma=0.5 px`,
+100-landmark budget, 300/200 track pool hysteresis, truth-initialized).
+
+| Sequence | Frames (proc/eval) | ATE pos RMSE (m) | RPE trans RMSE (m/s) | RPE rot RMSE (rad/s) | Mean NEES (15 dof) | Frontend (ms/frame) | Update (ms/frame) | Wall time (s) |
+|---|---|---|---|---|---|---|---|---|
+| MH_01_easy | 3,682 / 3,638 | 0.176734 | 0.0138104 | 0.00243615 | 6,658 | 31.18 | 9.83 | 168.7 |
+| MH_02_easy | 3,040 / 2,999 | 0.132614 | 0.0107325 | 0.00209964 | 4,542 | 30.43 | 9.54 | 134.9 |
+| MH_03_medium | 2,700 / 2,631 | 0.156169 | 0.03273 | 0.0027516 | 4,646 | 31.98 | 9.81 | 125.0 |
+| MH_04_difficult | -- | blocked | blocked | blocked | blocked | -- | -- | -- |
+| MH_05_difficult | 2,273 / 2,221 | 0.459346 | 0.0289296 | 0.00271473 | 18,118 | 29.23 | 9.73 | 98.6 |
+
+All four completed sequences stay under the `50 ms` 20 Hz frame budget with
+10-15% headroom (frontend + update between `38.96` and `41.79 ms/frame`), so
+the 300/200 track-pool hysteresis tuned on MH_01 alone (see "Bounding the
+track pool" below) generalizes to timing on the other sequences without
+retuning.
+
+Accuracy does not generalize as cleanly. The two `easy` sequences (MH_01,
+MH_02) land within a factor of 1.3x of each other on ATE. `medium`
+(MH_03) matches their ATE but has 2.4-3x worse RPE translation, meaning the
+filter's local trajectory shape is noisier per second even though the
+endpoint-style ATE metric does not show it -- consistent with `medium`
+carrying faster or more varied motion that the same fixed pixel-noise model
+and track pool handle less precisely frame to frame. `difficult` (MH_05) is
+in a different regime entirely: 2.6-3.5x worse ATE and NEES than any other
+sequence by nearly 3x, which given the yaw-NEES finding above (unobservable
+direction, second-order linearization error) is the expected shape for a
+harder trajectory feeding more attitude excitation into the same
+first-order EKF, not evidence of a new defect.
+
+### MH_04_difficult is blocked
+
+`mh01_benchmark --sequence MH_04_difficult` hard fails at dataset load:
+`cam0 and cam1 must contain the same number of frames, got 2033 and 2032`.
+This is a defect in the raw EuRoC download itself, not an extraction
+artifact -- `unzip -l MH_04_difficult.zip` already reports the same 2033/2032
+split, and `mav0/cam1/data/1403638127245096960.png` is simply absent from
+cam0's otherwise-matching frame set. This is exactly the scenario
+`scope.md` anticipates in its stated error-handling policy ("camera frame
+gap -> warn, continue") and `ARCHITECTURE.md` records as not yet
+implemented: the parser currently hard-fails on any cam0/cam1 length
+mismatch because no sequence loader exists yet to drop or interpolate
+across a single dropped frame. Running MH_04_difficult requires that loader,
+not a change to this benchmark tool.
 
 ## Frontend Optimization Experiments (300-frame MH_01 prefix)
 

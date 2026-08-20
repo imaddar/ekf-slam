@@ -3,5 +3,10 @@ datasets/
 /build/
 /.plot-venv/
 /artifacts/mh01_trace/
+/artifacts/mh01_graphs/
+/output/pdf/
+/presentation/
+/presentation_script.md
 
 Cargo.lock
+.DS_Store

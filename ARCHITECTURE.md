@@ -24,9 +24,10 @@ klt_tracker.hpp/cpp Pyramidal inverse-compositional KLT tracking
 stereo_matcher.hpp/cpp Row-constrained rectified stereo association
 feature_frontend.hpp/cpp Stateful track lifecycle and estimator-facing observations
 evaluation.hpp/cpp  Ground-truth association plus ATE/RPE/NEES trajectory metrics
-mh01_benchmark.cpp  Reproducible MH_01 evaluator executable; optional `[max_frames]`
-                    truncates profiling runs and `--trace-dir <directory>` exports CSV traces
-benchmark_trace.hpp/cpp  Opt-in MH_01 trace writer for IMU, camera-frame, and per-observation CSVs plus run metadata
+mh01_benchmark.cpp  Reproducible EuRoC evaluator executable; defaults to MH_01_easy,
+                    `--sequence <name>` selects any `datasets/machine_hall/<name>` sequence,
+                    optional `[max_frames]` truncates profiling runs and `--trace-dir <directory>` exports CSV traces
+benchmark_trace.hpp/cpp  Opt-in trace writer for IMU, camera-frame, and per-observation CSVs plus run metadata
 measurement_model.hpp/cpp Pure pinhole prediction h(.) and sparse Jacobian blocks
 measurement_update.hpp/cpp Sequential per-landmark stereo EKF update and gating
 propagation.hpp/cpp Public IMU nominal-state propagation
