@@ -1,6 +1,0 @@
-\beamer@sectionintoc {1}{Estimator formulation}{5}{0}{1}
-\beamer@sectionintoc {2}{How the system is verified}{10}{0}{2}
-\beamer@sectionintoc {3}{Real-data results}{13}{0}{3}
-\beamer@sectionintoc {4}{The negative result and diagnosis}{23}{0}{4}
-\beamer@sectionintoc {5}{Takeaways}{27}{0}{5}
-\beamer@sectionintoc {6}{Appendix}{30}{1}{6}
