@@ -217,6 +217,20 @@ Two consequences for what to fix:
   filter is already consistent. Initialization is tracked as its own open
   decision in `ARCHITECTURE.md`.
 
+#### Isolated NEES experiments (2026-08-16)
+
+The isolated `codex/nees-experiments` branch tested the leading candidates
+without changing synthetic truth or seeds. An undamped iterated update reduced
+NEES only from `24.2257` to `22.7277` at three iterations while increasing
+camera-update cost from `16.2` to `42.7` microseconds/frame (2.63x); more
+iterations worsened the metric. It is evidence of nonlinearity, not a merge
+candidate. A matched `0.001 rad` initial orientation sigma reached `15.9176`,
+inside the interval, with no update-runtime change. Inflating assumed pixel
+covariance by 2x also reaches `15.5757` without material accuracy or runtime
+change, but generated pixels already use the nominal 0.5 px noise, so it is a
+diagnostic calibration sensitivity—not a valid fix. Full method, results, and
+follow-ups: `NEES_EXPERIMENTS.md`.
+
 Separately, the accelerometer-bias over-confidence (`7.16`) was mostly a
 under-excited test trajectory rather than a filter property: adding roll/pitch
 excitation drops it to `3.88` without touching tilt. Accelerometer bias and tilt

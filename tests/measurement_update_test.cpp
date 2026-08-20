@@ -698,6 +698,9 @@ TEST(GatingTest, RejectsANonFiniteThreshold) {
     EXPECT_FALSE(update_stereo_frame(
         state, scenario.observations, make_cam0(), make_cam1(), scenario.pixel_covariance,
         UpdateOptions{.chi_square_threshold = -1.0}));
+    EXPECT_FALSE(update_stereo_frame(
+        state, scenario.observations, make_cam0(), make_cam1(), scenario.pixel_covariance,
+        UpdateOptions{.max_iterations = 0}));
 }
 
 TEST(GatingTest, RejectsNonFinitePixelCovariance) {
