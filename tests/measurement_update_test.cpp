@@ -711,3 +711,15 @@ TEST(GatingTest, RejectsNonFinitePixelCovariance) {
     EXPECT_FALSE(update_stereo_frame(
         state, scenario.observations, make_cam0(), make_cam1(), covariance));
 }
+
+TEST(GatingTest, RejectsANonFiniteOrNonPositiveCovarianceScale) {
+    Scenario scenario = make_scenario(3, 0.0);
+    SlamState state = scenario.state;
+    std::vector<StereoObservation> invalid = scenario.observations;
+    invalid.front().covariance_scale = 0.0;
+    EXPECT_FALSE(update_stereo_frame(state, invalid, make_cam0(), make_cam1(), scenario.pixel_covariance));
+    invalid.front().covariance_scale = -1.0;
+    EXPECT_FALSE(update_stereo_frame(state, invalid, make_cam0(), make_cam1(), scenario.pixel_covariance));
+    invalid.front().covariance_scale = std::numeric_limits<double>::quiet_NaN();
+    EXPECT_FALSE(update_stereo_frame(state, invalid, make_cam0(), make_cam1(), scenario.pixel_covariance));
+}

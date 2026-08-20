@@ -11,7 +11,13 @@ is measured, why it matters, and where the value comes from.
 | Real MH_01 frontend smoke run | `tests/euroc_frontend_test.cpp` | First 30 stereo frames (1.45 s); truth-initialized, 100-landmark budget | Peak 377 tracks; 356 augmentations; 317 updates applied; 480 gated; final position error `5.81 mm` | Passing smoke test; not an ATE result |
 | Real MH_01 frontend preliminary run | `tests/euroc_frontend_test.cpp` | Full MH_01, 3,682 stereo frames; truth-initialized, 100-landmark budget | Peak 233 tracks; 24,103 augmentations; 187,726 applied and 57,964 gated updates; final position error `2.02 m`; frontend `101.2 ms/frame`, update `5.71 ms/frame` | Completes stably; misses 20 Hz budget and needs tracking/noise tuning |
 | MH_01 pixel-noise sensitivity | `tests/euroc_frontend_test.cpp` | First 100 frames; independent scalar detector-noise sweep | `sigma=0.5 px`: 1,190 gated / 2,423 applied, `2.87 cm`; `sigma=1.0 px`: 758 gated / 3,116 applied, `4.94 cm` | Neither is a calibrated model; do not tune by gate count alone |
-| MH_01 full trajectory benchmark | `mh01_benchmark.cpp` | Full 3,682-frame filter pass; 3,638 camera timestamps shared with ground truth; truth-initialized, `sigma=0.5 px`, 100-landmark budget | ATE position RMSE `0.696915 m`; 1 s RPE translation RMSE `0.0484806 m/s`; rotation RMSE `0.00552155 rad/s`; mean 15-dof NEES `217,927` | Completes, but covariance is severely over-confident; not a consistency pass |
+| MH_01 full trajectory benchmark | `mh01_benchmark.cpp` | Full 3,682-frame filter pass; 3,638 camera timestamps shared with ground truth; truth-initialized, `sigma=0.5 px`, 100-landmark budget, 300-track pool | ATE position RMSE `0.176734 m`; 1 s RPE translation RMSE `0.0138104 m/s`; rotation RMSE `0.00243615 rad/s`; mean 15-dof NEES `6,658` | Completes; covariance still over-confident by ~440x, so not a consistency pass |
+| MH_01 R-calibration prefix | `mh01_benchmark.cpp` | First 100 frames, fixed Q and frontend; scalar pixel-sigma sweep | 0.5 px: NEES `1897`; 1.0 px: `293`; 1.5 px: `222`; 2.0 px: `191` | R is too small, but scalar inflation alone does not restore consistency; see `R_CALIBRATION_MH01.md` |
+| MH_01 frontend stage profile | `mh01_benchmark.cpp` | Same full pass; per-stage wall clock from `FeatureFrontend::stage_timings()` | Frontend `30.7 ms/frame` plus update `9.6 ms/frame` against a `50 ms` budget at 20 Hz; `detect` `7.6 ms` (24.7%), whole KLT family `21.0 ms` (68.3%) | Meets 20 Hz at `40.3 ms/frame`, ~20% headroom on the dev machine; not a Jetson number |
+| MH_02_easy full trajectory benchmark | `mh01_benchmark --sequence MH_02_easy` | Full 3,040-frame filter pass; 2,999 camera timestamps shared with ground truth; same config as the MH_01 row | ATE position RMSE `0.132614 m`; 1 s RPE translation RMSE `0.0107325 m/s`; rotation RMSE `0.00209964 rad/s`; mean 15-dof NEES `4,542`; frontend `30.4 ms/frame` plus update `9.5 ms/frame` | Completes, meets 20 Hz; best ATE/NEES of the four running sequences |
+| MH_03_medium full trajectory benchmark | `mh01_benchmark --sequence MH_03_medium` | Full 2,700-frame filter pass; 2,631 camera timestamps shared with ground truth; same config as the MH_01 row | ATE position RMSE `0.156169 m`; 1 s RPE translation RMSE `0.03273 m/s`; rotation RMSE `0.0027516 rad/s`; mean 15-dof NEES `4,646`; frontend `32.0 ms/frame` plus update `9.8 ms/frame` | Completes, meets 20 Hz; RPE translation is 2.4-3x the easy sequences despite comparable ATE |
+| MH_04_difficult full trajectory benchmark | `mh01_benchmark --sequence MH_04_difficult` | Full sequence | Parser hard fail: `cam0 and cam1 must contain the same number of frames, got 2033 and 2032` | Blocked, not a filter defect; see "MH_04_difficult is blocked" below |
+| MH_05_difficult full trajectory benchmark | `mh01_benchmark --sequence MH_05_difficult` | Full 2,273-frame filter pass; 2,221 camera timestamps shared with ground truth; same config as the MH_01 row | ATE position RMSE `0.459346 m`; 1 s RPE translation RMSE `0.0289296 m/s`; rotation RMSE `0.00271473 rad/s`; mean 15-dof NEES `18,118`; frontend `29.2 ms/frame` plus update `9.7 ms/frame` | Completes, meets 20 Hz; worst ATE and NEES by a wide margin, consistent with `difficult` being a harder trajectory, not a regression |
 
 | Metric | Source | Scenario | Current value / bound | Status |
 |---|---|---|---|---|
@@ -211,6 +217,12 @@ Two consequences for what to fix:
   OC-EKF address spurious information in the unobservable directions, and yaw is
   already consistent here. Relinearizing toward the posterior is what attacks a
   second-order error.
+  - **This conclusion does not survive real data.** It was drawn on a 2-second
+    synthetic run, which is far too short for yaw to drift. The MH_01 trace
+    analysis below measures yaw NEES at a median of `311` with reported yaw
+    sigma *shrinking* while yaw error grows. FEJ/OC-EKF is the targeted fix on
+    real sequences; the iterated-EKF argument stands only for the synthetic
+    tilt scenario it was measured on.
 - **The scenario is pessimistic.** A `0.01 rad` (`0.57 deg`) initial tilt error
   is worse than a real system starts from; static-start gravity alignment from a
   stationary accelerometer reaches `~0.001 rad`, which is the regime where this
@@ -256,13 +268,362 @@ nearest later camera sample at least one second away and reports rate-normalized
 translation and rotation RMSE. NEES uses the posterior 15-state robot covariance
 and the project error-state convention.
 
-The `0.697 m` ATE and `4.85 cm/s` translational RPE show a working offline VIO
-loop on real images, but the `217,927` mean NEES is orders of magnitude above
-the 15-dof expectation. This is a calibration/consistency failure, not an
-accuracy victory: the filter reports uncertainty far smaller than its actual
-state error. The `113.3 ms/frame` frontend also exceeds EuRoC's 50 ms camera
-period. The next work is frontend optimization and noise/linearization
-consistency work before presenting MH_01 as a reliable estimator.
+The `0.254 m` ATE and `1.49 cm/s` translational RPE come from a pipeline that
+also meets the 20 Hz budget at `44.3 ms/frame` including the update. The
+`10,357` mean NEES remains roughly 700x the 15-dof expectation, so the filter
+still reports uncertainty far smaller than its actual state error. That is a
+calibration/consistency failure and it is now the single largest open problem:
+accuracy and runtime both improved by fixing the frontend, and neither addresses
+a measurement noise model that does not describe the measurements.
+
+Both numbers moved together for one reason. The pyramidal KLT was truncating
+refinement at coarse levels, which inflated feature-position error well past the
+assumed `sigma = 0.5 px`, killed tracks after a frame or two, and forced constant
+re-acquisition. Fixing it improved ATE 2.7x, RPE 3.3x, and NEES 21x while
+cutting frontend cost 3.1x. The remaining NEES gap is not explained by it, and
+should be attacked as a noise-model and linearization problem rather than a
+tracking one. History of the intermediate measurements is in the optimization
+experiments section below.
+
+## MH_01 Frontend Stage Profile
+
+`FeatureFrontend` accumulates wall-clock totals per stage and `mh01_benchmark`
+prints them, so frontend cost is attributable without an external profiler.
+Timer overhead is roughly 20 us per frame, well under the run-to-run spread.
+
+Full MH_01, 3,682 frames, `RelWithDebInfo`, single-threaded, Apple silicon dev
+machine. PNG decode is `4.17 ms/frame` and sits outside `process`; it is an
+offline-benchmark cost with no live-camera equivalent.
+
+| Stage | ms/frame | Share | Calls/frame | us/call |
+|---|---|---|---|---|
+| `detect` | 16.73 | 46.3% | 1 | 16,731 |
+| `stereo_tracked` | 4.91 | 13.6% | <= 139.3 | >= 35 |
+| `temporal_klt` | 4.63 | 12.8% | 139.3 | 33 |
+| `forward_backward` | 4.25 | 11.8% | 139.3 | 31 |
+| `stereo_new` | 3.42 | 9.5% | 190.9 | 18 |
+| `pyramid` | 1.68 | 4.7% | 2 | 842 |
+| `rectify` | 0.50 | 1.4% | 2 | 248 |
+| `bookkeeping` | 0.03 | 0.1% | -- | -- |
+| **total** | **36.16** | | | |
+
+Frontend plus update is `44.3 ms/frame` against the `50 ms` camera period, so
+the pipeline meets 20 Hz on the dev machine with about 12% headroom. That
+headroom will not survive the Jetson port on its own; per-track KLT is
+embarrassingly parallel and is the intended source of margin there.
+
+Cost is now split roughly evenly between detection (46%) and the four KLT call
+sites (48%). `detect` is a fixed per-frame cost that ignores demand: it scans
+the full image every frame and emits 190.9 corners into a 100-landmark budget.
+About 70% of all pixels clear `min_eigenvalue = 1e-3`, so the candidate list it
+must select from is roughly 250k entries per frame. Demand-driven detection and
+a local-maximum test before selection are the open items there, and both change
+which features the filter sees.
+
+## Cross-Sequence EuRoC Benchmark (Machine Hall)
+
+`mh01_benchmark` took a `--sequence <name>` flag so the same evaluator can run
+any `datasets/machine_hall/<name>` sequence instead of only MH_01_easy. All
+five Machine Hall sequences were downloaded; four run end to end under the
+current pipeline with no per-sequence tuning (same `sigma=0.5 px`,
+100-landmark budget, 300/200 track pool hysteresis, truth-initialized).
+
+| Sequence | Frames (proc/eval) | ATE pos RMSE (m) | RPE trans RMSE (m/s) | RPE rot RMSE (rad/s) | Mean NEES (15 dof) | Frontend (ms/frame) | Update (ms/frame) | Wall time (s) |
+|---|---|---|---|---|---|---|---|---|
+| MH_01_easy | 3,682 / 3,638 | 0.176734 | 0.0138104 | 0.00243615 | 6,658 | 31.18 | 9.83 | 168.7 |
+| MH_02_easy | 3,040 / 2,999 | 0.132614 | 0.0107325 | 0.00209964 | 4,542 | 30.43 | 9.54 | 134.9 |
+| MH_03_medium | 2,700 / 2,631 | 0.156169 | 0.03273 | 0.0027516 | 4,646 | 31.98 | 9.81 | 125.0 |
+| MH_04_difficult | -- | blocked | blocked | blocked | blocked | -- | -- | -- |
+| MH_05_difficult | 2,273 / 2,221 | 0.459346 | 0.0289296 | 0.00271473 | 18,118 | 29.23 | 9.73 | 98.6 |
+
+All four completed sequences stay under the `50 ms` 20 Hz frame budget with
+10-15% headroom (frontend + update between `38.96` and `41.79 ms/frame`), so
+the 300/200 track-pool hysteresis tuned on MH_01 alone (see "Bounding the
+track pool" below) generalizes to timing on the other sequences without
+retuning.
+
+Accuracy does not generalize as cleanly. The two `easy` sequences (MH_01,
+MH_02) land within a factor of 1.3x of each other on ATE. `medium`
+(MH_03) matches their ATE but has 2.4-3x worse RPE translation, meaning the
+filter's local trajectory shape is noisier per second even though the
+endpoint-style ATE metric does not show it -- consistent with `medium`
+carrying faster or more varied motion that the same fixed pixel-noise model
+and track pool handle less precisely frame to frame. `difficult` (MH_05) is
+in a different regime entirely: 2.6-3.5x worse ATE and NEES than any other
+sequence by nearly 3x, which given the yaw-NEES finding above (unobservable
+direction, second-order linearization error) is the expected shape for a
+harder trajectory feeding more attitude excitation into the same
+first-order EKF, not evidence of a new defect.
+
+### MH_04_difficult is blocked
+
+`mh01_benchmark --sequence MH_04_difficult` hard fails at dataset load:
+`cam0 and cam1 must contain the same number of frames, got 2033 and 2032`.
+This is a defect in the raw EuRoC download itself, not an extraction
+artifact -- `unzip -l MH_04_difficult.zip` already reports the same 2033/2032
+split, and `mav0/cam1/data/1403638127245096960.png` is simply absent from
+cam0's otherwise-matching frame set. This is exactly the scenario
+`scope.md` anticipates in its stated error-handling policy ("camera frame
+gap -> warn, continue") and `ARCHITECTURE.md` records as not yet
+implemented: the parser currently hard-fails on any cam0/cam1 length
+mismatch because no sequence loader exists yet to drop or interpolate
+across a single dropped frame. Running MH_04_difficult requires that loader,
+not a change to this benchmark tool.
+
+## Frontend Optimization Experiments (300-frame MH_01 prefix)
+
+Measured with `mh01_benchmark 300`, so accuracy figures compare against each
+other, not against the full-sequence rows above. Same machine and build
+throughout.
+
+| Change | ATE (m) | RPE trans (m/s) | Mean NEES | Applied | Frontend ms/frame |
+|---|---|---|---|---|---|
+| Baseline | 0.17503 | 0.06595 | 3,583 | 4,458 | 141.4 |
+| + O(1)-per-pixel detector | 0.17503 | 0.06595 | 3,583 | 4,458 | 99.5 |
+| + KLT coarse-to-fine fix | 0.01908 | 0.00927 | 324 | 11,937 | 189.5 |
+| + hoisted KLT template work | 0.01385 | 0.00912 | 341 | 11,160 | 33.1 |
+
+Full-sequence effect of per-feature pyramid depth, against the cam1-row commit:
+
+| Metric | Before | After | |
+|---|---|---|---|
+| ATE (m) | 0.270093 | 0.199708 | -26% |
+| RPE translation (m/s) | 0.0146450 | 0.0138255 | -6% |
+| RPE rotation (rad/s) | 0.0028025 | 0.0023794 | -15% |
+| Mean NEES | 11,405 | 7,961 | -30% |
+| Peak tracks | 301 | 547 | +82% |
+| Landmarks augmented | 10,633 | 17,714 | +67% |
+| Frontend + update (ms/frame) | 45.1 | 55.7 | **+24%, over budget** |
+
+### Bounding the track pool
+
+Tracking cost is paid per track per frame regardless of whether the filter can
+consume the track, and after the border fix the frontend was carrying 257
+features for a 100-landmark budget. A plain cap trades accuracy for time close
+to linearly, because it stops detection entirely once full and the surviving
+pool loses spatial spread:
+
+| `max_tracks` | ATE (m) | Mean NEES | Frontend + update (ms) |
+|---|---|---|---|
+| uncapped (peak 547) | 0.1997 | 7,961 | 55.7 |
+| 350 | 0.2124 | 7,750 | 53.5 |
+| 250 | 0.2407 | 8,765 | 50.2 |
+| 150 | 0.2613 | 7,553 | 44.5 |
+
+Adding hysteresis breaks that trade. Detection is a fixed whole-frame cost that
+does not scale with how many features it is asked for, so topping up a handful
+of dead tracks every frame pays it in full for a trickle of features. Draining
+to `redetect_below` and refilling to `max_tracks` amortizes it:
+
+| `max_tracks` / `redetect_below` | ATE (m) | Mean NEES | Frontend + update (ms) |
+|---|---|---|---|
+| 350 / 250 | 0.1985 | 6,826 | 45.4 |
+| **300 / 200** | **0.1767** | **6,658** | **40.3** |
+| 250 / 150 | 0.2366 | 8,382 | 36.1 |
+
+`300 / 200` beats the uncapped configuration on every axis at once -- 11% better
+ATE, 16% better NEES, and 15 ms faster -- which is the signature of removing
+work that was actively harmful rather than merely redundant. `detect` falls from
+15.9 to 7.6 ms because it now runs on a fraction of frames.
+
+Both thresholds were chosen on MH_01 alone. They are defaults tuned against one
+sequence and should be re-checked before being trusted generally; evaluation
+against the remaining EuRoC sequences is still open in `scope.md`.
+
+**Detector rewrite is behavior-preserving.** Gradients are computed once per
+pixel rather than once per window tap, the box sum is separable, and per-cell
+bounded selection replaces a full sort over roughly 250k candidates.
+`tests/corner_detector_test.cpp` asserts identical corner positions against a
+reference transcription of the original loop, and every accuracy figure is
+unchanged. The sort was the larger half of that cost, not the structure tensor.
+
+**The KLT coarse-to-fine fix trades runtime for accuracy.** `track_feature`
+returned from the whole function on convergence at any pyramid level instead of
+refining at the next finer one, so a measured 90% of calls returned a
+coarsest-level estimate scaled up by 8 (`L0 conv=191, L1 388, L2 1096, L3
+20933`). Coarse estimates failed the `0.5 px` forward-backward check, tracks
+died early, and the detector re-acquired features every frame. Correcting it
+cost 2x the frontend time because every call now runs all four levels.
+
+**Hoisting recovers that and more.** The template patch, its gradients, and its
+mean are invariant while the iteration refines against the target, but were
+recomputed on every one of up to 30 iterations. Each iteration went from
+`441 x 8` samples to `441 x 1`, and the retained samples no longer return a
+`ParseResult`. Measured 8.7x per KLT call, against a predicted 8x.
+
+Sampling unchecked required tightening the patch margin from `half + 1` to
+`half + 2`. The original margin did **not** guarantee the gradient footprint was
+in bounds: it admits `point.x` up to just under `width - half - 1`, so the
+outermost sample can land in `(width - 1, width)`, which the checked sampler
+rejects. The per-sample checks were load-bearing, not redundant. The tighter
+margin rejects features within one pixel of the border, which is why this row
+moves the accuracy numbers at all instead of being bit-identical.
+
+## MH_01 Consistency Diagnosis
+
+Computed from `mh01_benchmark 1500 --trace-dir`, 77,867 observations over 75 s.
+The gate statistic already recorded per observation is NIS, so no new
+instrumentation was needed. Numbers below are medians unless stated; innovation
+spreads use MAD-derived sigma because the residual distribution is heavy-tailed
+and the standard deviation reports the tail rather than the bulk.
+
+### Yaw is the problem
+
+| Quantity | Measured | Expected |
+|---|---|---|
+| Yaw NEES (1 dof) | `311.5` | `1` |
+| Tilt NEES (2 dof) | `41.3` | `2` |
+| Position NEES (3 dof) | `0.93` | `3` |
+
+| Window | Yaw error | Reported yaw sigma |
+|---|---|---|
+| 0-10 s | `5.7 mrad` | `0.86 mrad` |
+| 30-40 s | `19.9 mrad` | `1.15 mrad` |
+| 70-80 s | `60.9 mrad` | `0.52 mrad` |
+
+Yaw error grows 10x while the filter's reported yaw sigma *shrinks*. Global yaw
+is unobservable in VIO -- only gravity-orthogonal rotation is pinned by the
+accelerometer -- so its variance must be non-decreasing under any correct
+update, because the measurements carry no information about it. Observing it
+decrease is direct evidence of spurious information entering an unobservable
+direction, which is the textbook EKF-SLAM inconsistency that FEJ and OC-EKF
+exist to fix. Position NEES sits at `0.93`, below its expectation, so the error
+is not spread across the state: it is concentrated in yaw.
+
+### The measurement noise model is not the problem
+
+| Component | Bulk sigma (MAD) | Std | Assumed |
+|---|---|---|---|
+| `u0` | `0.23 px` | `0.41 px` | `0.5 px` |
+| `v0` | `0.26 px` | `1.39 px` | `0.5 px` |
+| `u1` | `0.24 px` | `0.50 px` | `0.5 px` |
+
+`R` is about 4x *conservative* in variance for the bulk of measurements, not
+understated. That also explains the NIS distribution: median `0.725` against a
+chi-square-4 expectation of `3.36`, almost exactly the factor of 4. The filter
+is self-consistent with respect to its own innovations. Inflating `R` would move
+NEES the wrong way.
+
+The `std`-to-MAD ratio of 5x on `v0` says the residual distribution is
+heavy-tailed rather than Gaussian: outliers are passing the gate. That argues
+for a robust cost or better association rejection, not for a larger `R`.
+
+### Two independent over-counting defects
+
+- **The cam1 row is a duplicate, not a measurement.** `FeatureFrontend` builds
+  `pixel_cam1` as `{track.pixel.x() - disparity, track.pixel.y()}`, so the
+  observed `v1` is a copy of `v0` and the rectified model predicts the two rows
+  identically. Measured `max |innovation_v0 - innovation_v1| = 1.8e-11`. The
+  stereo measurement therefore carries three independent numbers, but
+  `R = sigma^2 I_4` treats the duplicated row as a fourth, doubling the
+  information in the vertical direction. The matched `v1` from the stereo
+  matcher is computed and then discarded.
+- **Residuals are correlated in time.** Per-landmark innovation autocorrelation
+  is `0.784` at lag 1, `0.683` at lag 2, `0.245` at lag 5, and reaches zero
+  around lag 10. The same template matched against the same structure is biased
+  the same way frame after frame. For an AR(1) process that is a variance
+  inflation of `(1 + rho) / (1 - rho) ~ 8.3x`, so a 24-frame track (the measured
+  mean length) carries roughly 3 independent observations, not 24.
+
+### The cheap fixes were measured, and they are a wash
+
+Predicted ~16x from removing the two over-counting defects. Measured 1.1x.
+
+| Configuration | ATE (m) | RPE trans (m/s) | Mean NEES | Gated |
+|---|---|---|---|---|
+| Before | 0.253809 | 0.0148663 | 10,357 | 11,364 |
+| Real cam1 row | 0.270093 | 0.0146450 | 11,405 | 11,354 |
+| Real cam1 row + `sigma = 0.72 px` | 0.278976 | 0.0163773 | 9,323 | 6,630 |
+
+The prediction treated the over-counting factors as if they multiply into NEES.
+They do not. NEES here is dominated by a structural linearization defect in an
+unobservable direction, and no scaling of `R` addresses it: inflating `R` slows
+the collapse of `P` but also weakens the correction, so state error grows to
+match. Both effects are roughly 10% and they cancel.
+
+The cam1 row fix is kept because it is a correctness fix independent of the
+metric: the filter was being handed the same number twice under an `R` that
+claims four independent components. The row residual is now a live diagnostic
+again rather than identically zero -- `sigma = 0.275 px` with a `-0.096 px`
+mean, so `sigma_v = 0.195 px` per camera and there is a small systematic
+vertical offset between the rectified pair worth checking against calibration.
+Innovation correlation between the two rows is `0.997`, but that is shared
+*state* error, which `S = HPH' + R` already accounts for; what matters is that
+the *noise* is now independent, and it is.
+
+`sigma = 0.72 px` is left unapplied. The derivation is sound and the measured
+trade is not worth 10% of ATE while `R` is not the binding constraint. Revisit
+after FEJ, when it may well become binding.
+
+### Order of work
+
+1. FEJ or OC-EKF. Everything else is a rounding error next to yaw NEES of 311
+   with a shrinking sigma.
+2. Drop the duplicated cam1 row to a 3-dof stereo measurement, or model the
+   correlation explicitly. Worth a factor of 2 in the vertical directions.
+3. Inflate `R` by the effective-sample-size factor, or thin per-landmark
+   updates, to stop counting ~8 correlated observations as 8 independent ones.
+4. Robust cost or association rejection for the heavy tail.
+5. Leave `R`'s nominal scale alone. It is conservative, and tightening it toward
+   the measured `0.25 px` would make consistency worse.
+
+## The Unmatchable Border
+
+Investigating why the frontend flatlines at 22 tracks for 25 s found a
+structural defect that is present on every frame, not just the static one.
+
+`valid_patch` requires the patch centre to sit `window_half_size + 2 = 12` px
+inside the image *at every pyramid level*. The coarsest of 4 levels is 94x60,
+so the centre must lie in `[12, 82) x [12, 48)` there. Scaled back by 8, the
+level-0 feature must lie in `[96, 656) x [96, 384)` -- a 560x288 box, **44.7% of
+a 752x480 frame**. Everything outside is geometrically impossible to match, and
+fails deterministically at the first level before any iteration runs.
+
+Measured over 900 frames, 262,935 stereo attempts:
+
+| | Count | Note |
+|---|---|---|
+| Inside the box | 121,756 | 46.3% of attempts |
+| Outside the box | 141,179 | 53.7% |
+| Successful matches | 31,686 | **all inside**; `ok_outside = 0` |
+| `kOutOfBounds` outside | 141,179 | 100% of outside attempts |
+| `kOutOfBounds` inside | 32,857 | drifted out during iteration |
+
+Not one successful match has ever come from outside the box. Two consequences:
+
+- **Lost coverage, not lost time.** An earlier version of this section claimed
+  the doomed searches cost `2.8 ms/frame`, by multiplying 157 calls by the
+  `17.9 us` stage average. That is wrong, and it is the same error this file
+  already warns about: a doomed call fails the bounds check at the coarsest
+  level before any iteration runs, so it is far cheaper than the average call,
+  not equal to it. Fixing the defect *raised* `stereo_new` from `3.42` to
+  `6.22 ms/frame` on fewer calls (191 to 115) at higher cost each (`17.9` to
+  `53.9 us`), which is what confirms the failures were nearly free. The border
+  cost accuracy, not throughput.
+- **The static-window trap.** `detect_corners` buckets by grid cell and fills
+  cells that look unoccupied. The dead border is *always* unoccupied, because
+  nothing can ever track there, so it permanently attracts the per-cell
+  detection budget. During the static window the detector proposes the same 267
+  corners every frame, ~245 of them unmatchable, and the map cannot grow: tracks
+  sit at exactly 22 with zero births and zero deaths for 25 seconds. This is the
+  feedback trap, not a coincidence of the vehicle being still -- the vehicle
+  being still just removes the churn that normally hides it.
+
+The static window matters because it is where the damage is set up: attitude
+error grows from 2 to 25 mrad while the vehicle sits at `0.0027 m/s` mean speed
+with only 22 landmarks, and 25 mrad of yaw error times ~10 m of subsequent
+travel is the `0.25 m` position jump that appears the moment motion resumes.
+
+Fix options, in increasing order of how much field of view they keep:
+
+1. Restrict detection to the matchable box. Cheapest, recovers the 2.8 ms, but
+   formalizes the loss of 55% of the frame.
+2. Shrink `window_half_size`. `half = 6` widens the box to 63% of the frame.
+3. Drop to 3 pyramid levels: 72.7% of the frame, at the cost of the coarse
+   level that catches large motion.
+4. Choose the pyramid depth per feature so the patch fits at the coarsest level
+   used. Keeps the full frame; a border feature simply tracks with fewer levels.
+   This is the principled fix and does not trade anything away.
 
 ## Reporting Policy
 

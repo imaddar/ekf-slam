@@ -44,6 +44,8 @@ struct StereoObservation {
     LandmarkId id = 0;
     Eigen::Vector2d pixel_cam0 = Eigen::Vector2d::Zero();
     Eigen::Vector2d pixel_cam1 = Eigen::Vector2d::Zero();
+    // Multiplies the frame's base pixel covariance for this observation.
+    double covariance_scale = 1.0;
 };
 
 enum class ObservationOutcome {

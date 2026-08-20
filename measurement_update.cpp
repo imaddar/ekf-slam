@@ -93,7 +93,15 @@ void symmetrize(Eigen::MatrixBase<Derived>& covariance) {
 }
 
 struct PreparedObservation {
+    // Blocks/sparse/residual are not cached here: the iterated update
+    // relinearizes every accepted observation fresh each pass (see Phase B),
+    // so a Phase-A snapshot of them would go stale after iteration 0.
     StereoObservation observation;
+    // Per-observation covariance after covariance_scale is applied; distinct
+    // from the function's shared base pixel_covariance argument. This does
+    // not depend on the linearization point, so it is safe to precompute
+    // once in Phase A and reuse across iterations.
+    Eigen::Matrix4d observation_covariance;
     LandmarkId id;
 };
 
@@ -218,13 +226,18 @@ ParseResult<StereoUpdateResult> update_stereo_frame(
             return std::unexpected(std::format(
                 "observation {}: expected finite stereo pixels", observation.id));
         }
+        if (!(std::isfinite(observation.covariance_scale) && observation.covariance_scale > 0.0)) {
+            return std::unexpected(std::format(
+                "observation {}: expected a positive finite covariance scale", observation.id));
+        }
+        const Eigen::Matrix4d observation_covariance = observation.covariance_scale * pixel_covariance;
         const Eigen::Vector4d residual = measurement - blocks->prediction;
         diagnostics.innovation = residual;
 
         const SparseJacobian sparse = compact_jacobian(*blocks);
         const Eigen::Matrix4d innovation_covariance =
             sparse * gather_prior_block(state.active_covariance(), *offset) * sparse.transpose()
-            + pixel_covariance;
+            + observation_covariance;
         const Eigen::LLT<Eigen::Matrix4d> factorization(innovation_covariance);
         if (factorization.info() != Eigen::Success) {
             return std::unexpected(std::format(
@@ -244,6 +257,7 @@ ParseResult<StereoUpdateResult> update_stereo_frame(
         result.diagnostics.push_back(diagnostics);
         prepared.push_back(PreparedObservation{
             .observation = observation,
+            .observation_covariance = observation_covariance,
             .id = observation.id,
         });
     }
@@ -310,7 +324,7 @@ ParseResult<StereoUpdateResult> update_stereo_frame(
 
             sparse_h_times_p(*blocks, covariance, row_block);
             const Eigen::Matrix4d innovation_covariance =
-                gather_columns(row_block, *offset) * sparse.transpose() + pixel_covariance;
+                gather_columns(row_block, *offset) * sparse.transpose() + entry.observation_covariance;
             const Eigen::LLT<Eigen::Matrix4d> factorization(innovation_covariance);
             if (factorization.info() != Eigen::Success) {
                 return std::unexpected(std::format(
@@ -329,7 +343,7 @@ ParseResult<StereoUpdateResult> update_stereo_frame(
                 // exact arithmetic, and computing it this way is the entire point.
                 sparse_m_times_h_transpose(*blocks, sparse, covariance, joseph_column);
                 covariance.noalias() -= joseph_column * gain.transpose();
-                covariance.noalias() += gain * pixel_covariance * gain.transpose();
+                covariance.noalias() += gain * entry.observation_covariance * gain.transpose();
             }
             symmetrize(covariance);
             // Count once per accepted observation, not once per relinearization
