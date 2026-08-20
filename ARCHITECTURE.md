@@ -24,7 +24,10 @@ klt_tracker.hpp/cpp Pyramidal inverse-compositional KLT tracking
 stereo_matcher.hpp/cpp Row-constrained rectified stereo association
 feature_frontend.hpp/cpp Stateful track lifecycle and estimator-facing observations
 evaluation.hpp/cpp  Ground-truth association plus ATE/RPE/NEES trajectory metrics
-mh01_benchmark.cpp  Reproducible full-sequence MH_01 evaluator executable
+mh01_benchmark.cpp  Reproducible EuRoC evaluator executable; defaults to MH_01_easy,
+                    `--sequence <name>` selects any `datasets/machine_hall/<name>` sequence,
+                    optional `[max_frames]` truncates profiling runs and `--trace-dir <directory>` exports CSV traces
+benchmark_trace.hpp/cpp  Opt-in trace writer for IMU, camera-frame, and per-observation CSVs plus run metadata
 measurement_model.hpp/cpp Pure pinhole prediction h(.) and sparse Jacobian blocks
 measurement_update.hpp/cpp Sequential per-landmark stereo EKF update and gating
 propagation.hpp/cpp Public IMU nominal-state propagation
@@ -50,6 +53,8 @@ tests/synthetic_test.cpp Synthetic trajectory and IMU propagation tests
 tests/triangulation_test.cpp Stereo triangulation covariance tests
 tests/landmark_augmentation_test.cpp Landmark covariance augmentation tests
 tests/slam_integration_test.cpp End-to-end SLAM state and closed-loop filter tests
+tests/klt_tracker_test.cpp Pyramid-depth selection and border tracking
+tests/corner_detector_test.cpp Detector equivalence against a reference implementation on a real frame
 tests/euroc_frontend_test.cpp Real MH_01 rectification, tracking, and closed-loop smoke tests
 tests/evaluation_test.cpp  Ground-truth association and trajectory-metric tests
 ```
@@ -157,6 +162,12 @@ from the continuous error-state dynamics, plus first-order process noise
 `Q_d = G Q_raw G^T dt` from the IMU noise densities and bias random walks.
 `propagate_slam(...)` shares this robot transition/process-noise construction,
 then applies it to the active joint covariance block structure.
+
+`initialization.hpp/cpp` defines `initialize_static_imu(...)`. It estimates
+gravity-aligned roll/pitch and gyroscope bias from a verified stationary IMU
+interval while requiring caller-provided position and heading, which gravity
+cannot observe. It rejects too-short, non-finite, rotating, or non-gravity-like
+intervals rather than silently treating moving data as a static start.
 
 `synthetic.hpp` exposes `SyntheticTrajectory`, `SyntheticImuConfig`,
 `SyntheticLandmark`, `SyntheticCameraConfig`, `SyntheticStereoObservation`,
@@ -270,6 +281,9 @@ agreement between injected noise and the calibration densities.
 - `FeatureFrontend::process(cam0_raw, cam1_raw, timestamp)` — public. Rectifies
   a pair, tracks and stereo-matches features, then returns mapped observations,
   augmentation candidates, and deferred landmark removals.
+- `FeatureFrontend::stage_timings()` — public. Returns the `FrontendStageTimings`
+  wall-clock totals accumulated per stage across every processed frame, so a
+  caller can attribute frontend cost without an external profiler.
 - `SlamState::robot_landmark_covariance()` and
   `SlamState::landmark_landmark_covariance()` — public. Return active-region
   views of `P_rl` and `P_ll`; inactive landmark capacity is excluded.
@@ -289,6 +303,11 @@ agreement between injected noise and the calibration densities.
   dense compaction pass and rebuilds the ID registry.
 - `propagate_slam(slam_state, measurement, imu_calibration, timestep_seconds)` —
   public. Propagates the nominal robot state and joint covariance in place.
+- `initialize_static_imu(stationary_measurements, options)` — public.
+  Validates a stationary IMU interval and returns a `NominalState` with
+  gravity-aligned roll/pitch and gyroscope bias estimated from the mean
+  specific force and angular rate; position, heading, velocity, and
+  accelerometer bias come from `options` or default to zero.
 - `camera_point_to_world(robot, camera, point_camera)` and
   `world_point_to_camera(robot, camera, point_world)` — public. Apply the
   validated metric XYZ frame transforms using `CameraCalibration::t_bs`.
@@ -601,6 +620,34 @@ work.
   failure mode this design has: dropping the accumulated-error term,
   relinearizing mid-sweep, and correlated `R`.
 
+### Static initialization
+
+- **Hard-reject a non-stationary interval rather than degrade silently.**
+  `initialize_static_imu(...)` gates on sample count, finite values, mean
+  angular-rate norm (`0.05 rad/s`), and mean specific-force magnitude against
+  `9.81 m/s^2` (`+/- 0.2`) before estimating anything. An earlier permissive
+  attempt that skipped the angular-rate gate on MH_01 carried a `0.1327 rad/s`
+  motion bias into the filter, and its innovation covariance lost positive
+  definiteness by camera frame `2,977`. A plausible-looking but wrong
+  tilt/bias estimate is worse than a loud failure: it corrupts every
+  downstream metric silently.
+- **Estimate only roll/pitch and gyro bias; leave position, heading,
+  velocity, and accel bias to the caller or zero.** A single specific-force
+  vector at rest observes gravity direction (2 DOF), not yaw, so
+  `heading_reference` must come from outside the IMU (ground truth,
+  magnetometer, or a later visual alignment). Velocity is zero by
+  construction, since the interval is stationary. Accelerometer bias is left
+  at zero because a single orientation cannot separate a constant bias from a
+  fixed tilt error; a second, independent observation is needed to split
+  them.
+- **Yaw is added as a right/body-frame correction, not composed as a separate
+  Euler angle.** The tilt-only rotation from measured "up" to the reference
+  "up" is the minimal-angle rotation between two near-vertical vectors, whose
+  axis is horizontal to first order, so `heading_reference * tilt_correction`
+  changes roll/pitch and leaves yaw unperturbed to first order. This matches
+  the project's right/local rotation-perturbation convention
+  (`CONVENTIONS.md` section 2) instead of a bespoke Euler decomposition.
+
 ### Error handling and API shape
 
 - **`std::expected<T, std::string>` over exceptions or error codes.** Exceptions
@@ -747,6 +794,44 @@ work.
   Products such as `0.29 * 200` evaluate to `57.999999999999993`, and a plain
   `floor` dropped the final sample — which showed up as a 17x worse propagation
   error (`0.009` vs `0.0005`) that looked like an integrator bug and was not.
+- **Visualization traces are exported at the benchmark boundary, not from
+  estimator code.** `mh01_benchmark --trace-dir` records IMU propagation,
+  camera-frame prior/posterior, and per-observation innovation rows without
+  changing the filter API or normal benchmark cost. Each row carries only the
+  fixed-size 15-state robot covariance; exporting the full joint covariance at
+  every IMU sample would grow with the map and make presentation data needlessly
+  large. Metadata pins the sequence, noise setting, landmark budget, timestamp
+  unit, covariance layout, and compiled Git revision for reproducibility.
+
+- **The KLT patch loops sample unchecked behind a single widened bounds gate.**
+  `sample_bilinear` returns `ParseResult<double>`, which is right at the domain
+  boundary and wrong in the tracker's innermost loop, where the error string it
+  can never produce still costs a fat return on every sample.
+  `sample_bilinear_unchecked` carries the same interpolation math with the check
+  hoisted to the caller, and `sample_bilinear` delegates to it so the two cannot
+  diverge. Making that safe required widening `valid_patch` from `half + 1` to
+  `half + 2`: the patch takes central-difference gradients one pixel outside the
+  window and bilinear interpolation needs the pixel after that, so the original
+  margin did not actually cover the footprint it was guarding. The trade is a
+  one-pixel band at the image border where features are now rejected earlier.
+- **Pyramid depth is chosen per feature, not fixed.** `valid_patch` needs the
+  patch centre `window_half_size + 2` px inside the image at every level used,
+  which in level-0 terms costs `(half + 2) * 2^level` at each border. With four
+  levels and a 21x21 window that excluded the outer 96 px, 55% of a 752x480
+  frame, where a match failed on the bounds check before any iteration ran and
+  never succeeded once. `track_feature` now starts at the deepest level whose
+  footprint fits both images. The condition is monotone in level, so the deepest
+  fitting level also guarantees every finer one. Interior features are
+  unaffected; border features trade convergence range, which is what coarse
+  levels buy, for being trackable at all. A feature at the very edge of a
+  level's validity band remains marginal, because the patch only just fits and
+  iteration drift can leave the image.
+- **Per-level template quantities are computed once, not per iteration.** The
+  template patch, its gradients, and its mean do not change while the iteration
+  refines the estimate against the target, so they are built alongside the
+  Hessian, which was already computing exactly those gradients and discarding
+  them. This is what the "inverse-compositional" label on the tracker means in
+  practice; the previous form recomputed all of it on every iteration.
 
 ### Build and tooling
 
@@ -815,13 +900,19 @@ sections above (or out of this file) once it is actually built.
   retire a mapped track at the following frame boundary so offsets cannot change
   during a sweep.
 - **Initialization.** The EuRoC smoke test starts from ground truth, which a
-  real system does not have. Static-start bias and gravity-direction estimation,
-  or a short visual-inertial alignment, are the standard options and neither
-  exists. This is now coupled to the NEES finding above: the filter is consistent
-  at an initial tilt error of `0.001 rad` and inconsistent at `0.01 rad`, and
-  static gravity alignment from a stationary accelerometer reaches the former.
-  Initialization quality is therefore a consistency lever, not just a
-  convenience.
+  real system does not have. `initialize_static_imu(...)` now implements one
+  of the two standard options: gravity-direction and gyro-bias estimation
+  from a verified stationary IMU interval (see the Static initialization
+  decisions above). It is not yet validated end-to-end on MH_01: the
+  sequence's first 100 IMU samples fail the stationarity gate (mean
+  angular-rate norm `0.1327 rad/s` against the `0.05 rad/s` limit) because the
+  sequence begins in motion, so there is no legitimate initialized MH_01
+  accuracy/NEES number yet. This is still coupled to the NEES finding above:
+  the filter is consistent at an initial tilt error of `0.001 rad` and
+  inconsistent at `0.01 rad`, and static gravity alignment reaches the former
+  once a genuinely stationary interval is available. A short visual-inertial
+  alignment that tolerates motion, or a dataset/launch configuration with a
+  verified stationary prefix, remains open.
 - **Raw-frame MH_01 metrics rather than aligned scores.** `mh01_benchmark`
   associates posterior camera-time estimates to interpolated EuRoC truth and
   reports raw-world ATE, one-second RPE, and 15-dof NEES. A global SE(3)
@@ -847,7 +938,7 @@ behavior yet.
 
 ## Tests
 
-127 GoogleTest cases across thirteen binaries, run through CTest (125 active;
+132 GoogleTest cases across fourteen binaries, run through CTest (130 active;
 two NEES diagnostics intentionally disabled):
 
 - `tests/parser_test.cpp` — inline YAML/CSV fixtures plus a smoke test against
@@ -880,6 +971,9 @@ two NEES diagnostics intentionally disabled):
   short closed-loop image measurement smoke run.
 - `tests/evaluation_test.cpp` — ground-truth interpolation plus analytical
   ATE, RPE, and NEES metric cases.
+- `tests/initialization_test.cpp` — static-IMU tilt and gyro-bias recovery,
+  and rejection of too-short, non-finite, rotating, and non-gravity-magnitude
+  intervals.
 
 Metric values and the reasoning behind each tolerance live in
 [BENCHMARKS.md](BENCHMARKS.md).

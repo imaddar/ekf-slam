@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <numeric>
 #include <iostream>
 
@@ -40,6 +41,61 @@ TEST(EurocFrontendTest, RectifiesAndMaintainsStereoTracksOnMh01) {
     }
     EXPECT_GT(peak_tracks, 20);
     EXPECT_GT(birth_candidates, 0);
+}
+
+TEST(EurocFrontendTest, HoldsTheTrackPoolWithinItsCapAndRefillsAfterDraining) {
+    const auto dataset = parse_dataset(std::filesystem::path{EKF_SLAM_SOURCE_DIR} / "datasets/machine_hall/MH_01_easy");
+    ASSERT_TRUE(dataset) << dataset.error();
+    const auto rectification = make_stereo_rectification(dataset->cam0_calibration, dataset->cam1_calibration);
+    ASSERT_TRUE(rectification) << rectification.error();
+    // Tight thresholds so both the cap and the refill are exercised within a
+    // short prefix rather than only under a long run's attrition.
+    FrontendOptions options;
+    options.max_mapped_landmarks = 40;
+    options.max_tracks = 60;
+    options.redetect_below = 40;
+    const auto frontend_result = FeatureFrontend::create(*rectification, options);
+    ASSERT_TRUE(frontend_result) << frontend_result.error();
+    FeatureFrontend frontend = *frontend_result;
+
+    int peak_tracks = 0, minimum_after_first_fill = std::numeric_limits<int>::max();
+    for (std::size_t index = 0; index < 30; ++index) {
+        const StereoPair& pair = dataset->stereo_pairs.at(index);
+        const auto cam0 = load_grayscale_png(pair.cam0_image_path);
+        const auto cam1 = load_grayscale_png(pair.cam1_image_path);
+        ASSERT_TRUE(cam0) << cam0.error();
+        ASSERT_TRUE(cam1) << cam1.error();
+        const auto frame = frontend.process(*cam0, *cam1, pair.timestamp);
+        ASSERT_TRUE(frame) << frame.error();
+        EXPECT_LE(frame->active_track_count, static_cast<int>(options.max_tracks)) << "at frame " << index;
+        peak_tracks = std::max(peak_tracks, frame->active_track_count);
+        if (index > 0) minimum_after_first_fill = std::min(minimum_after_first_fill, frame->active_track_count);
+    }
+    // The pool fills to the cap, and attrition never strands it below the
+    // hysteresis threshold for long, because dropping under it triggers a refill.
+    EXPECT_EQ(peak_tracks, static_cast<int>(options.max_tracks));
+    EXPECT_GT(minimum_after_first_fill, 0);
+}
+
+TEST(EurocFrontendTest, RejectsATrackPoolConfigurationItCannotHonor) {
+    const auto dataset = parse_dataset(std::filesystem::path{EKF_SLAM_SOURCE_DIR} / "datasets/machine_hall/MH_01_easy");
+    ASSERT_TRUE(dataset) << dataset.error();
+    const auto rectification = make_stereo_rectification(dataset->cam0_calibration, dataset->cam1_calibration);
+    ASSERT_TRUE(rectification) << rectification.error();
+
+    FrontendOptions fewer_tracks_than_landmarks;
+    fewer_tracks_than_landmarks.max_mapped_landmarks = 100;
+    fewer_tracks_than_landmarks.max_tracks = 50;
+    EXPECT_FALSE(FeatureFrontend::create(*rectification, fewer_tracks_than_landmarks));
+
+    FrontendOptions threshold_above_cap;
+    threshold_above_cap.max_tracks = 200;
+    threshold_above_cap.redetect_below = 201;
+    EXPECT_FALSE(FeatureFrontend::create(*rectification, threshold_above_cap));
+
+    FrontendOptions never_detects;
+    never_detects.redetect_below = 0;
+    EXPECT_FALSE(FeatureFrontend::create(*rectification, never_detects));
 }
 
 TEST(EurocFrontendTest, PreliminaryMh01ClosedLoopRunAppliesRealImageMeasurements) {
