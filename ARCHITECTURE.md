@@ -153,6 +153,12 @@ from the continuous error-state dynamics, plus first-order process noise
 `propagate_slam(...)` shares this robot transition/process-noise construction,
 then applies it to the active joint covariance block structure.
 
+`initialization.hpp/cpp` defines `initialize_static_imu(...)`. It estimates
+gravity-aligned roll/pitch and gyroscope bias from a verified stationary IMU
+interval while requiring caller-provided position and heading, which gravity
+cannot observe. It rejects too-short, non-finite, rotating, or non-gravity-like
+intervals rather than silently treating moving data as a static start.
+
 `synthetic.hpp` exposes `SyntheticTrajectory`, `SyntheticImuConfig`,
 `SyntheticLandmark`, `SyntheticCameraConfig`, `SyntheticStereoObservation`,
 `make_synthetic_imu_calibration(...)`,
@@ -284,6 +290,11 @@ agreement between injected noise and the calibration densities.
   dense compaction pass and rebuilds the ID registry.
 - `propagate_slam(slam_state, measurement, imu_calibration, timestep_seconds)` —
   public. Propagates the nominal robot state and joint covariance in place.
+- `initialize_static_imu(stationary_measurements, options)` — public.
+  Validates a stationary IMU interval and returns a `NominalState` with
+  gravity-aligned roll/pitch and gyroscope bias estimated from the mean
+  specific force and angular rate; position, heading, velocity, and
+  accelerometer bias come from `options` or default to zero.
 - `camera_point_to_world(robot, camera, point_camera)` and
   `world_point_to_camera(robot, camera, point_world)` — public. Apply the
   validated metric XYZ frame transforms using `CameraCalibration::t_bs`.
@@ -596,6 +607,34 @@ work.
   failure mode this design has: dropping the accumulated-error term,
   relinearizing mid-sweep, and correlated `R`.
 
+### Static initialization
+
+- **Hard-reject a non-stationary interval rather than degrade silently.**
+  `initialize_static_imu(...)` gates on sample count, finite values, mean
+  angular-rate norm (`0.05 rad/s`), and mean specific-force magnitude against
+  `9.81 m/s^2` (`+/- 0.2`) before estimating anything. An earlier permissive
+  attempt that skipped the angular-rate gate on MH_01 carried a `0.1327 rad/s`
+  motion bias into the filter, and its innovation covariance lost positive
+  definiteness by camera frame `2,977`. A plausible-looking but wrong
+  tilt/bias estimate is worse than a loud failure: it corrupts every
+  downstream metric silently.
+- **Estimate only roll/pitch and gyro bias; leave position, heading,
+  velocity, and accel bias to the caller or zero.** A single specific-force
+  vector at rest observes gravity direction (2 DOF), not yaw, so
+  `heading_reference` must come from outside the IMU (ground truth,
+  magnetometer, or a later visual alignment). Velocity is zero by
+  construction, since the interval is stationary. Accelerometer bias is left
+  at zero because a single orientation cannot separate a constant bias from a
+  fixed tilt error; a second, independent observation is needed to split
+  them.
+- **Yaw is added as a right/body-frame correction, not composed as a separate
+  Euler angle.** The tilt-only rotation from measured "up" to the reference
+  "up" is the minimal-angle rotation between two near-vertical vectors, whose
+  axis is horizontal to first order, so `heading_reference * tilt_correction`
+  changes roll/pitch and leaves yaw unperturbed to first order. This matches
+  the project's right/local rotation-perturbation convention
+  (`CONVENTIONS.md` section 2) instead of a bespoke Euler decomposition.
+
 ### Error handling and API shape
 
 - **`std::expected<T, std::string>` over exceptions or error codes.** Exceptions
@@ -810,13 +849,19 @@ sections above (or out of this file) once it is actually built.
   retire a mapped track at the following frame boundary so offsets cannot change
   during a sweep.
 - **Initialization.** The EuRoC smoke test starts from ground truth, which a
-  real system does not have. Static-start bias and gravity-direction estimation,
-  or a short visual-inertial alignment, are the standard options and neither
-  exists. This is now coupled to the NEES finding above: the filter is consistent
-  at an initial tilt error of `0.001 rad` and inconsistent at `0.01 rad`, and
-  static gravity alignment from a stationary accelerometer reaches the former.
-  Initialization quality is therefore a consistency lever, not just a
-  convenience.
+  real system does not have. `initialize_static_imu(...)` now implements one
+  of the two standard options: gravity-direction and gyro-bias estimation
+  from a verified stationary IMU interval (see the Static initialization
+  decisions above). It is not yet validated end-to-end on MH_01: the
+  sequence's first 100 IMU samples fail the stationarity gate (mean
+  angular-rate norm `0.1327 rad/s` against the `0.05 rad/s` limit) because the
+  sequence begins in motion, so there is no legitimate initialized MH_01
+  accuracy/NEES number yet. This is still coupled to the NEES finding above:
+  the filter is consistent at an initial tilt error of `0.001 rad` and
+  inconsistent at `0.01 rad`, and static gravity alignment reaches the former
+  once a genuinely stationary interval is available. A short visual-inertial
+  alignment that tolerates motion, or a dataset/launch configuration with a
+  verified stationary prefix, remains open.
 - **Raw-frame MH_01 metrics rather than aligned scores.** `mh01_benchmark`
   associates posterior camera-time estimates to interpolated EuRoC truth and
   reports raw-world ATE, one-second RPE, and 15-dof NEES. A global SE(3)
@@ -842,7 +887,7 @@ behavior yet.
 
 ## Tests
 
-127 GoogleTest cases across thirteen binaries, run through CTest (125 active;
+132 GoogleTest cases across fourteen binaries, run through CTest (130 active;
 two NEES diagnostics intentionally disabled):
 
 - `tests/parser_test.cpp` — inline YAML/CSV fixtures plus a smoke test against
@@ -875,6 +920,9 @@ two NEES diagnostics intentionally disabled):
   short closed-loop image measurement smoke run.
 - `tests/evaluation_test.cpp` — ground-truth interpolation plus analytical
   ATE, RPE, and NEES metric cases.
+- `tests/initialization_test.cpp` — static-IMU tilt and gyro-bias recovery,
+  and rejection of too-short, non-finite, rotating, and non-gravity-magnitude
+  intervals.
 
 Metric values and the reasoning behind each tolerance live in
 [BENCHMARKS.md](BENCHMARKS.md).

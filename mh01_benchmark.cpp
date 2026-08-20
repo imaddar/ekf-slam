@@ -1,6 +1,7 @@
 #include "evaluation.hpp"
 #include "feature_frontend.hpp"
 #include "image_io.hpp"
+#include "initialization.hpp"
 #include "landmark_augmentation.hpp"
 #include "propagation.hpp"
 
@@ -18,7 +19,11 @@ int fail(std::string_view message) {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc > 2 || (argc == 2 && std::string_view{argv[1]} != "--static-init")) {
+        return fail("usage: mh01_benchmark [--static-init]");
+    }
+    const bool use_static_initialization = argc == 2;
     const auto dataset = parse_dataset(std::filesystem::path{EKF_SLAM_SOURCE_DIR} / "datasets/machine_hall/MH_01_easy");
     if (!dataset) return fail(dataset.error());
     const auto rectification = make_stereo_rectification(dataset->cam0_calibration, dataset->cam1_calibration);
@@ -27,10 +32,27 @@ int main() {
     if (!frontend_result) return fail(frontend_result.error());
     FeatureFrontend frontend = std::move(*frontend_result);
     const GroundTruthState& initial = dataset->ground_truth_states.front();
-    const auto state_result = SlamState::create(100, NominalState{
+    NominalState initial_state{
         .position = initial.position, .velocity = initial.velocity, .orientation = Sophus::SO3d{initial.orientation},
         .accelerometer_bias = initial.accelerometer_bias, .gyroscope_bias = initial.gyroscope_bias,
-    }, 1e-4 * ImuStateCovariance::Identity());
+    };
+    if (use_static_initialization) {
+        constexpr std::size_t kStaticSamples = 100;
+        if (dataset->imu_measurements.size() < kStaticSamples) {
+            return fail("static initialization requires 100 IMU samples");
+        }
+        const auto initialized = initialize_static_imu(
+            std::span{dataset->imu_measurements}.first(kStaticSamples),
+            StaticInitializationOptions{
+                // Gravity cannot observe these; retaining them isolates the
+                // IMU-derived tilt and gyro-bias effect in raw-world metrics.
+                .initial_position_world = initial.position,
+                .heading_reference = Sophus::SO3d{initial.orientation},
+            });
+        if (!initialized) return fail(initialized.error());
+        initial_state = *initialized;
+    }
+    const auto state_result = SlamState::create(100, initial_state, 1e-4 * ImuStateCovariance::Identity());
     if (!state_result) return fail(state_result.error());
     SlamState state = std::move(*state_result);
     constexpr double kPixelSigma = 0.5;
@@ -92,6 +114,7 @@ int main() {
     if (!metrics) return fail(metrics.error());
     const double frames = static_cast<double>(estimates.size());
     std::cout << "MH_01_easy benchmark\n"
+              << "initialization=" << (use_static_initialization ? "static_imu_truth_position_heading" : "ground_truth") << '\n'
               << "frames=" << metrics->sample_count << " rpe_pairs=" << metrics->rpe_pair_count << '\n'
               << "ate_position_rmse_m=" << metrics->ate_position_rmse_m << '\n'
               << "rpe_translation_rmse_m_per_s=" << metrics->rpe_translation_rmse_m_per_s << '\n'
