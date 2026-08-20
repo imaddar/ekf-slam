@@ -40,6 +40,7 @@ add_library(ekf_slam_parser
     klt_tracker.cpp
     stereo_matcher.cpp
     feature_frontend.cpp
+    initialization.cpp
     evaluation.cpp
     augmentation_jacobians.cpp
     landmark_augmentation.cpp
@@ -131,6 +132,25 @@ if(BUILD_TESTING)
     )
 
     gtest_discover_tests(state_tests)
+
+    add_executable(initialization_tests
+        tests/initialization_test.cpp
+    )
+
+    target_link_libraries(initialization_tests
+        PRIVATE
+            ekf_slam_parser
+            GTest::gtest_main
+    )
+
+    target_compile_options(initialization_tests
+        PRIVATE
+            -Wall
+            -Wextra
+            -Werror
+    )
+
+    gtest_discover_tests(initialization_tests)
 
     add_executable(slam_state_tests
         tests/slam_state_test.cpp

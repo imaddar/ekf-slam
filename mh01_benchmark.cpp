@@ -2,6 +2,7 @@
 #include "evaluation.hpp"
 #include "feature_frontend.hpp"
 #include "image_io.hpp"
+#include "initialization.hpp"
 #include "landmark_augmentation.hpp"
 #include "propagation.hpp"
 
@@ -23,10 +24,12 @@ int fail(std::string_view message) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    constexpr std::string_view kUsage = "usage: mh01_benchmark [max_frames] [--sequence NAME] [--trace-dir directory]";
+    constexpr std::string_view kUsage =
+        "usage: mh01_benchmark [max_frames] [--sequence NAME] [--trace-dir directory] [--static-init]";
     std::size_t max_frames = std::numeric_limits<std::size_t>::max();
     std::string sequence_name = "MH_01_easy";
     std::optional<std::filesystem::path> trace_directory;
+    bool use_static_initialization = false;
     for (int argument_index = 1; argument_index < argc; ++argument_index) {
         const std::string_view argument{argv[argument_index]};
         if (argument == "--trace-dir") {
@@ -37,6 +40,10 @@ int main(int argc, char** argv) {
         if (argument == "--sequence") {
             if (++argument_index >= argc) return fail(kUsage);
             sequence_name = argv[argument_index];
+            continue;
+        }
+        if (argument == "--static-init") {
+            use_static_initialization = true;
             continue;
         }
         const auto parsed = std::from_chars(argument.data(), argument.data() + argument.size(), max_frames);
@@ -52,10 +59,27 @@ int main(int argc, char** argv) {
     if (!frontend_result) return fail(frontend_result.error());
     FeatureFrontend frontend = std::move(*frontend_result);
     const GroundTruthState& initial = dataset->ground_truth_states.front();
-    const auto state_result = SlamState::create(100, NominalState{
+    NominalState initial_state{
         .position = initial.position, .velocity = initial.velocity, .orientation = Sophus::SO3d{initial.orientation},
         .accelerometer_bias = initial.accelerometer_bias, .gyroscope_bias = initial.gyroscope_bias,
-    }, 1e-4 * ImuStateCovariance::Identity());
+    };
+    if (use_static_initialization) {
+        constexpr std::size_t kStaticSamples = 100;
+        if (dataset->imu_measurements.size() < kStaticSamples) {
+            return fail("static initialization requires 100 IMU samples");
+        }
+        const auto initialized = initialize_static_imu(
+            std::span{dataset->imu_measurements}.first(kStaticSamples),
+            StaticInitializationOptions{
+                // Gravity cannot observe these; retaining them isolates the
+                // IMU-derived tilt and gyro-bias effect in raw-world metrics.
+                .initial_position_world = initial.position,
+                .heading_reference = Sophus::SO3d{initial.orientation},
+            });
+        if (!initialized) return fail(initialized.error());
+        initial_state = *initialized;
+    }
+    const auto state_result = SlamState::create(100, initial_state, 1e-4 * ImuStateCovariance::Identity());
     if (!state_result) return fail(state_result.error());
     SlamState state = std::move(*state_result);
     // Measured per-observation residual sigma is 0.25 px (MAD, so the bulk
@@ -165,6 +189,7 @@ int main(int argc, char** argv) {
     const std::chrono::nanoseconds accounted = stages.rectify + stages.pyramid + stages.temporal_klt
         + stages.forward_backward + stages.stereo_tracked + stages.detect + stages.stereo_new;
     std::cout << sequence_name << " benchmark\n"
+              << "initialization=" << (use_static_initialization ? "static_imu_truth_position_heading" : "ground_truth") << '\n'
               << "frames=" << metrics->sample_count << " rpe_pairs=" << metrics->rpe_pair_count << '\n'
               << "ate_position_rmse_m=" << metrics->ate_position_rmse_m << '\n'
               << "rpe_translation_rmse_m_per_s=" << metrics->rpe_translation_rmse_m_per_s << '\n'
